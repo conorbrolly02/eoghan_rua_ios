@@ -1,5 +1,5 @@
 
-name: iOS Build (Briefcase)
+name: iOS Build (BeeWare Briefcase)
 
 on:
   workflow_dispatch:
@@ -7,39 +7,38 @@ on:
 jobs:
   build-ios:
     runs-on: macos-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-     -version: "3.11"      - name: Set up Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
       - name: Install Briefcase
         run: |
           python -m pip install --upgrade pip
           pip install briefcase
 
-      - name: Create iOS Xcode project
+      - name: Create iOS Project
         run: |
           briefcase create iOS
 
-      - name: Build iOS
+      - name: Build iOS App
         run: |
           briefcase build iOS
 
-      # Signing/export steps go here once Apple Dev credentials are provided:
-      # - Decode certificates from secrets
-      # - xcodebuild archive & export
-      # - Upload artifact
-
-      - name: Archive Xcode project (unsigned)
+      - name: Archive Xcode Project (unsigned)
         run: |
-          cd ios/Eoghan Rua Team Selector
-          xcodebuild -scheme "Eoghan Rua Team Selector" -configuration Release -archivePath build/EoghanRua.xcarchive archive
+          cd ios/Eoghan\ Rua\ Team\ Selector
+          xcodebuild -scheme "Eoghan Rua Team Selector" \
+                     -configuration Release \
+                     -archivePath build/EoghanRua.xcarchive archive
 
-      - name: Upload Xcode archive (unsigned)
+      - name: Upload unsigned Xcode archive
         uses: actions/upload-artifact@v4
         with:
           name: EoghanRua-xcarchive
           path: ios/Eoghan\ Rua\ Team\ Selector/build/EoghanRua.xcarchive
-        uses: actions/setup-python@v5
-        with:
