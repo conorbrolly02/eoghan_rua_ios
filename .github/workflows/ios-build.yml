@@ -2,7 +2,7 @@
 name: iOS Build (BeeWare Briefcase)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:   # Allows manual triggering
 
 jobs:
   build-ios:
@@ -22,6 +22,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install briefcase
 
+      - name: Verify pyproject.toml exists in root
+        run: |
+          if [ ! -f "pyproject.toml" ]; then
+            echo "pyproject.toml not found in repository root!"
+            exit 1
+          fi
+          echo "pyproject.toml located successfully."
+
       - name: Create iOS Project
         run: |
           briefcase create iOS
@@ -30,10 +38,36 @@ jobs:
         run: |
           briefcase build iOS
 
+      # 🔍 NEW: Auto-detect iOS app path created by Briefcase
+      - name: Locate iOS App Directory
+        id: findapp
+        run: |
+          echo "Searching for iOS app directory..."
+          APP_DIR=$(find ios -maxdepth 1 -type d -not -path "ios" | head -n 1)
+          echo "Found: $APP_DIR"
+          echo "APP_DIR=$APP_DIR" >> $GITHUB_OUTPUT
+
+      - name: Confirm located app directory
+        run: |
+          echo "Using app dir: ${{ steps.findapp.outputs.APP_DIR }}"
+          if [ ! -d "${{ steps.findapp.outputs.APP_DIR }}" ]; then
+            echo "ERROR: App directory does not exist."
+            exit 1
+          fi
+
+      # Export scheme name automatically
+      - name: Extract scheme name
+        id: scheme
+        run: |
+          SCHEME=$(basename "${{ steps.findapp.outputs.APP_DIR }}")
+          echo "Scheme: $SCHEME"
+          echo "SCHEME=$SCHEME" >> $GITHUB_OUTPUT
+
+      # Archive build (unsigned)
       - name: Archive Xcode Project (unsigned)
         run: |
-          cd ios/Eoghan\ Rua\ Team\ Selector
-          xcodebuild -scheme "Eoghan Rua Team Selector" \
+          cd "${{ steps.findapp.outputs.APP_DIR }}"
+          xcodebuild -scheme "${{ steps.scheme.outputs.SCHEME }}" \
                      -configuration Release \
                      -archivePath build/EoghanRua.xcarchive archive
 
@@ -41,4 +75,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: EoghanRua-xcarchive
-          path: ios/Eoghan\ Rua\ Team\ Selector/build/EoghanRua.xcarchive
+          path: ${{ steps.findapp.outputs.APP_DIR }}/build/EoghanRua.xcarchive
