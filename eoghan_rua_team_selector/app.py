@@ -1,12 +1,9 @@
 
 # app.py
-import os
-import io
 from toga import App
-from views.splash import Splash
-from views.home import Home
-from views.builder import Builder
-from views.preview import Preview
+from eoghan_rua_team_selector.views.splash import Splash
+from toga.style import Pack
+
 
 class EoghanRuaApp(App):
     def startup(self):
@@ -14,14 +11,17 @@ class EoghanRuaApp(App):
         self.main_window.show()
 
     def goto_home(self):
+        from eoghan_rua_team_selector.views.home import Home
         self.main_window = Home(self)
         self.main_window.show()
 
     def goto_builder(self):
+        from eoghan_rua_team_selector.views.builder import Builder
         self.main_window = Builder(self)
         self.main_window.show()
 
     def goto_preview(self, teams, crest_bytes):
+        from eoghan_rua_team_selector.views.preview import Preview
         self.main_window = Preview(self, teams, crest_bytes)
         self.main_window.show()
 
