@@ -7,12 +7,10 @@ url = "https://eoghanrua.ie"
 license = "Proprietary"
 author = "Eoghan Rua GAA"
 author_email = "info@eoghanrua.ie"
-description = "Offline team selector app for Eoghan Rua. CSV/manual input, balanced teams, Excel export."
+description = "Offline team selector app for Eoghan Rua GAA."
 formal_name = "Eoghan Rua Team Selector"
 app_name = "eoghan_rua_team_selector"
-sources = [
-    "eoghan_rua_team_selector"
-]
+sources = ["eoghan_rua_team_selector"]
 icon = "assets/icon.png"
 splash = "assets/splash.png"
 
