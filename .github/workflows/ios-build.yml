@@ -2,7 +2,7 @@
 name: iOS Build (BeeWare Briefcase)
 
 on:
-  workflow_dispatch:   # Allows manual triggering
+  workflow_dispatch:
 
 jobs:
   build-ios:
@@ -22,13 +22,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install briefcase
 
-      - name: Verify pyproject.toml exists in root
+      - name: Verify pyproject.toml exists
         run: |
           if [ ! -f "pyproject.toml" ]; then
-            echo "pyproject.toml not found in repository root!"
+            echo "pyproject.toml not found!"
             exit 1
           fi
-          echo "pyproject.toml located successfully."
+          echo "pyproject.toml found."
 
       - name: Create iOS Project
         run: |
@@ -38,7 +38,6 @@ jobs:
         run: |
           briefcase build iOS
 
-      # 🔍 NEW: Auto-detect iOS app path created by Briefcase
       - name: Locate iOS App Directory
         id: findapp
         run: |
@@ -49,13 +48,11 @@ jobs:
 
       - name: Confirm located app directory
         run: |
-          echo "Using app dir: ${{ steps.findapp.outputs.APP_DIR }}"
           if [ ! -d "${{ steps.findapp.outputs.APP_DIR }}" ]; then
             echo "ERROR: App directory does not exist."
             exit 1
           fi
 
-      # Export scheme name automatically
       - name: Extract scheme name
         id: scheme
         run: |
@@ -63,7 +60,6 @@ jobs:
           echo "Scheme: $SCHEME"
           echo "SCHEME=$SCHEME" >> $GITHUB_OUTPUT
 
-      # Archive build (unsigned)
       - name: Archive Xcode Project (unsigned)
         run: |
           cd "${{ steps.findapp.outputs.APP_DIR }}"
