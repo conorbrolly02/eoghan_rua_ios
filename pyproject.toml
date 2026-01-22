@@ -10,7 +10,10 @@ author_email = "info@eoghanrua.ie"
 description = "Offline team selector app for Eoghan Rua GAA."
 formal_name = "Eoghan Rua Team Selector"
 app_name = "eoghan_rua_team_selector"
+
+
 sources = ["eoghan_rua_team_selector"]
+
 icon = "assets/icon.png"
 splash = "assets/splash.png"
 
@@ -18,7 +21,7 @@ requires = [
     "toga>=0.4.7",
     "rubicon-objc>=0.4.7",
     "XlsxWriter>=3.1.9",
-    "Pillow>=10.0.0"
+    "Pillow>=10.0.0",
 ]
 
 [tool.briefcase.app.eoghan_rua_team_selector]
