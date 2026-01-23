@@ -2,16 +2,18 @@
 name: iOS Build (BeeWare Briefcase)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:   # Manual trigger
 
 jobs:
   build-ios:
     runs-on: macos-latest
 
     steps:
+      # 1) Get code
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2) Python for Briefcase
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -22,6 +24,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install briefcase
 
+      # 3) Sanity check: pyproject.toml must be in repo root
       - name: Verify pyproject.toml exists
         run: |
           if [ ! -f "pyproject.toml" ]; then
@@ -30,6 +33,7 @@ jobs:
           fi
           echo "pyproject.toml found."
 
+      # 4) Create and build with Briefcase
       - name: Create iOS Project
         run: |
           briefcase create iOS
@@ -38,37 +42,44 @@ jobs:
         run: |
           briefcase build iOS
 
-      - name: Locate iOS App Directory
+      # 5) NEW: Auto-detect Xcode folder under build/<app>/ios/xcode
+      - name: Locate Xcode iOS directory
         id: findapp
         run: |
-          echo "Searching for iOS app directory..."
-          APP_DIR=$(find ios -maxdepth 1 -type d -not -path "ios" | head -n 1)
+          echo "Searching for Xcode iOS build directory..."
+          APP_DIR=$(find build -type d -name "xcode" | head -n 1)
           echo "Found: $APP_DIR"
-          echo "APP_DIR=$APP_DIR" >> $GITHUB_OUTPUT
-
-      - name: Confirm located app directory
-        run: |
-          if [ ! -d "${{ steps.findapp.outputs.APP_DIR }}" ]; then
-            echo "ERROR: App directory does not exist."
+          if [ -z "$APP_DIR" ]; then
+            echo "ERROR: Xcode directory not found under build/."
+            echo "TIP: Check the 'Create iOS Project' and 'Build iOS App' logs for the actual path."
             exit 1
           fi
+          echo "APP_DIR=$APP_DIR" >> $GITHUB_OUTPUT
 
-      - name: Extract scheme name
+      # 6) Derive the scheme from the built .app name (e.g. 'Eoghan Rua Team Selector.app' -> scheme)
+      - name: Extract scheme name from .app
         id: scheme
         run: |
-          SCHEME=$(basename "${{ steps.findapp.outputs.APP_DIR }}")
-          echo "Scheme: $SCHEME"
-          echo "SCHEME=$SCHEME" >> $GITHUB_OUTPUT
+          APP_PATH=$(find "${{ steps.findapp.outputs.APP_DIR }}" -type d -name "*.app" | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: No .app found inside ${{ steps.findapp.outputs.APP_DIR }}."
+            exit 1
+          fi
+          APP_NAME=$(basename "$APP_PATH" ".app")
+          echo "Scheme: $APP_NAME"
+          echo "SCHEME=$APP_NAME" >> $GITHUB_OUTPUT
 
+      # 7) Archive (unsigned). We stay *inside* the Xcode dir Briefcase generated.
       - name: Archive Xcode Project (unsigned)
         run: |
           cd "${{ steps.findapp.outputs.APP_DIR }}"
           xcodebuild -scheme "${{ steps.scheme.outputs.SCHEME }}" \
                      -configuration Release \
-                     -archivePath build/EoghanRua.xcarchive archive
+                     -archivePath EoghanRua.xcarchive archive
 
+      # 8) Upload the archive as a downloadable artifact
       - name: Upload unsigned Xcode archive
         uses: actions/upload-artifact@v4
         with:
           name: EoghanRua-xcarchive
-          path: ${{ steps.findapp.outputs.APP_DIR }}/build/EoghanRua.xcarchive
+          path: ${{ steps.findapp.outputs.APP_DIR }}/EoghanRua.xcarchive
