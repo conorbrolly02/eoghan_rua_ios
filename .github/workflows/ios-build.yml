@@ -70,12 +70,21 @@ jobs:
           echo "SCHEME=$APP_NAME" >> $GITHUB_OUTPUT
 
       # 7) Archive (unsigned). We stay *inside* the Xcode dir Briefcase generated.
-      - name: Archive Xcode Project (unsigned)
+      - name: Archive Xcode Project (unsigned, no signing)
         run: |
           cd "${{ steps.findapp.outputs.APP_DIR }}"
-          xcodebuild -scheme "${{ steps.scheme.outputs.SCHEME }}" \
-                     -configuration Release \
-                     -archivePath EoghanRua.xcarchive archive
+          # Build a generic *device* archive, but turn off signing checks:
+          xcodebuild \
+            -scheme "${{ steps.scheme.outputs.SCHEME }}" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM= \
+            -archivePath EoghanRua.xcarchive \
+            archive
+
 
       # 8) Upload the archive as a downloadable artifact
       - name: Upload unsigned Xcode archive
@@ -83,3 +92,5 @@ jobs:
         with:
           name: EoghanRua-xcarchive
           path: ${{ steps.findapp.outputs.APP_DIR }}/EoghanRua.xcarchive
+
+
