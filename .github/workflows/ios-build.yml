@@ -62,6 +62,7 @@ jobs:
           echo "SCHEME=$SCHEME" >> $GITHUB_OUTPUT
 
       # 6) Install signing assets in a temporary keychain (with sanity checks)
+      
       - name: Set up signing
         id: signing
         env:
@@ -78,6 +79,67 @@ jobs:
           security set-keychain-settings -lut 3600 "$KEYCHAIN"
           security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
           security list-keychains -d user -s "$KEYCHAIN"
+
+          # ---- Decode original PKCS#12 and sanity-check with OpenSSL ----
+          echo "$IOS_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          echo "Verifying original PKCS#12…"
+          ls -lh "$RUNNER_TEMP/cert.p12"
+          wc -c  "$RUNNER_TEMP/cert.p12"
+          openssl pkcs12 -in "$RUNNER_TEMP/cert.p12" \
+            -passin pass:"$IOS_CERT_PASSWORD" \
+            -info -nokeys >/dev/null
+
+          # ---- Re-export as legacy PKCS#12 for macOS Keychain compatibility ----
+          # Convert to a temporary PEM (contains cert + private key)
+          openssl pkcs12 -in "$RUNNER_TEMP/cert.p12" \
+            -passin pass:"$IOS_CERT_PASSWORD" \
+            -nodes -out "$RUNNER_TEMP/cert_and_key.pem"
+
+          # Re-export to PKCS#12 using legacy parameters (OpenSSL 3 friendly to Keychain)
+          # Prefer the -legacy switch; if not available, use explicit legacy algorithms.
+          if openssl pkcs12 -export -legacy \
+               -in "$RUNNER_TEMP/cert_and_key.pem" \
+               -out "$RUNNER_TEMP/cert_legacy.p12" \
+               -name "Apple Distribution" \
+               -passout pass:"$IOS_CERT_PASSWORD" 2>/dev/null; then
+            echo "Re-exported PKCS#12 using -legacy."
+          else
+            echo "OpenSSL lacks -legacy; using explicit legacy algorithms…"
+            openssl pkcs12 -export \
+              -in "$RUNNER_TEMP/cert_and_key.pem" \
+              -out "$RUNNER_TEMP/cert_legacy.p12" \
+              -name "Apple Distribution" \
+              -passout pass:"$IOS_CERT_PASSWORD" \
+              -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES \
+              -macalg sha1 -nomaciter
+          fi
+
+          echo "Importing legacy PKCS#12 into keychain…"
+          security import "$RUNNER_TEMP/cert_legacy.p12" \
+            -k "$KEYCHAIN" \
+            -P "$IOS_CERT_PASSWORD" \
+            -T /usr/bin/codesign
+
+          # Allow codesign access
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PWD" "$KEYCHAIN"
+
+          # ---- Provisioning profile ----
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          PROFILE_PATH="$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision"
+          echo "$IOS_PROVISION_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+
+          PROFILE_PLIST="$RUNNER_TEMP/profile.plist"
+          /usr/bin/security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
+          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PROFILE_PLIST")
+          TEAM_ID=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PROFILE_PLIST")
+          echo "Using profile: $PROFILE_NAME (Team: $TEAM_ID)"
+
+          echo "PROFILE_NAME=$PROFILE_NAME" >> $GITHUB_OUTPUT
+          echo "TEAM_ID=$TEAM_ID" >> $GITHUB_OUTPUT
+          echo "KEYCHAIN=$KEYCHAIN" >> $GITHUB_OUTPUT
+
 
           # ---- Certificate (.p12): decode + sanity checks BEFORE import ----
           echo "$IOS_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
