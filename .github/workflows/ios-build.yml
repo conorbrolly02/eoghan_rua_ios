@@ -89,25 +89,89 @@ jobs:
             build
 
       # Find the built .app under the forced DerivedData products dir
-      - name: Locate built .app (Release-iphoneos)
-        id: findappbundle
+      
+      # Set up a temporary keychain and install signing assets
+      - name: Set up signing (cert + profile)
+        id: signing
+        env:
+          IOS_CERT_BASE64: ${{ secrets.IOS_CERT_BASE64 }}
+          IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
+          IOS_PROVISION_PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
         run: |
-          APP_DIR="${{ steps.findapp.outputs.APP_DIR }}"
-          PROD_DIR="$APP_DIR/build/derived/Build/Products/Release-iphoneos"
-          APP_BUNDLE=$(find "$PROD_DIR" -maxdepth 2 -type d -name "*.app" | head -n 1)
-          echo "Found app: $APP_BUNDLE"
-          if [ -z "$APP_BUNDLE" ]; then
-            echo "Build tree (debug):"
-            find "$APP_DIR/build" -maxdepth 5 -type d -print | sed 's/^/  /'
-            echo "ERROR: No .app found in $PROD_DIR"
-            exit 1
-          fi
-          echo "APP_BUNDLE=$APP_BUNDLE" >> $GITHUB_OUTPUT
+          set -e
 
-      # Zip and upload the unsigned .app
-      - name: Upload unsigned .app
+          KEYCHAIN="$RUNNER_TEMP/ios-signing.keychain-db"
+          KEYCHAIN_PWD="$(uuidgen)"
+
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN"
+
+          echo "$IOS_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$IOS_CERT_PASSWORD" -T /usr/bin/codesign
+
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN"
+
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          PROFILE_PATH="$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision"
+          echo "$IOS_PROVISION_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+
+          PROFILE_PLIST="$RUNNER_TEMP/profile.plist"
+          /usr/bin/security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
+
+          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PROFILE_PLIST")
+          TEAM_ID=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PROFILE_PLIST")
+
+          echo "PROFILE_NAME=$PROFILE_NAME" >> $GITHUB_OUTPUT
+          echo "TEAM_ID=$TEAM_ID" >> $GITHUB_OUTPUT
+          echo "KEYCHAIN=$KEYCHAIN" >> $GITHUB_OUTPUT
+
+      # Archive the app (signed)
+      - name: Archive iOS app
+        run: |
+          cd "${{ steps.findapp.outputs.APP_DIR }}"
+          xcodebuild \
+            -scheme "${{ steps.scheme.outputs.SCHEME }}" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            DEVELOPMENT_TEAM="${{ steps.signing.outputs.TEAM_ID }}" \
+            CODE_SIGN_STYLE=Manual \
+            PROVISIONING_PROFILE_SPECIFIER="${{ steps.signing.outputs.PROFILE_NAME }}" \
+            OTHER_CODE_SIGN_FLAGS="--keychain ${{ steps.signing.outputs.KEYCHAIN }}" \
+            -archivePath EoghanRua.xcarchive \
+            archive
+
+      # Export signed IPA
+      - name: Export signed IPA
+        run: |
+          cd "${{ steps.findapp.outputs.APP_DIR }}"
+
+          cat > ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <plist version="1.0">
+            <dict>
+              <key>method</key><string>ad-hoc</string>
+              <key>signingStyle</key><string>manual</string>
+              <key>teamID</key><string>${{ steps.signing.outputs.TEAM_ID }}</string>
+              <key>provisioningProfiles</key>
+              <dict>
+                <key>ie.eoghanrua.eoghan-rua-team-selector</key>
+                <string>${{ steps.signing.outputs.PROFILE_NAME }}</string>
+              </dict>
+            </dict>
+          </plist>
+          EOF
+
+          xcodebuild -exportArchive \
+            -archivePath EoghanRua.xcarchive \
+                       -exportOptionsPlist ExportOptions.plist
+
+      # Upload IPA
+      - name: Upload signed IPA
         uses: actions/upload-artifact@v4
         with:
-          name: EoghanRua-Release-iphoneos-app
-          path: ${{ steps.findappbundle.outputs.APP_BUNDLE }}
+          name: EoghanRua-AdHoc-IPA
+          path: ${{ steps.findapp.outputs.APP_DIR }}/export/*.ipa
 
