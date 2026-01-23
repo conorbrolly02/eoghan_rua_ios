@@ -7,6 +7,7 @@ on:
 jobs:
   build-ios:
     runs-on: macos-latest
+
     env:
       BUNDLE_ID: ie.eoghanrua.eoghan-rua-team-selector
 
@@ -37,17 +38,20 @@ jobs:
       - name: Locate Xcode directory
         id: xcode
         run: |
+          set -euo pipefail
           APP_DIR=$(find build -type d -name "xcode" | head -n 1)
           if [ -z "$APP_DIR" ]; then
             echo "ERROR: Xcode directory not found under build/"
             exit 1
           fi
+          echo "Found Xcode dir: $APP_DIR"
           echo "APP_DIR=$APP_DIR" >> $GITHUB_OUTPUT
 
       # 5) Determine scheme from the .app name
       - name: Determine scheme
         id: scheme
         run: |
+          set -euo pipefail
           APP_PATH=$(find "${{ steps.xcode.outputs.APP_DIR }}" -type d -name "*.app" | head -n 1)
           if [ -z "$APP_PATH" ]; then
             echo "ERROR: No .app found to infer scheme"
@@ -57,7 +61,7 @@ jobs:
           echo "Using scheme: $SCHEME"
           echo "SCHEME=$SCHEME" >> $GITHUB_OUTPUT
 
-      # 6) Install signing assets in a temporary keychain
+      # 6) Install signing assets in a temporary keychain (with sanity checks)
       - name: Set up signing
         id: signing
         env:
@@ -65,31 +69,48 @@ jobs:
           IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
           IOS_PROVISION_PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
         run: |
-          set -e
+          set -euo pipefail
 
+          echo "Creating temp keychain…"
           KEYCHAIN="$RUNNER_TEMP/ios-signing.keychain-db"
           KEYCHAIN_PWD="$(uuidgen)"
-
           security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
           security set-keychain-settings -lut 3600 "$KEYCHAIN"
           security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
           security list-keychains -d user -s "$KEYCHAIN"
 
-          # Certificate (.p12)
+          # ---- Certificate (.p12): decode + sanity checks BEFORE import ----
           echo "$IOS_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$IOS_CERT_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN"
 
-          # Provisioning profile
+          echo "Verifying PKCS#12 payload…"
+          ls -lh "$RUNNER_TEMP/cert.p12"
+          wc -c  "$RUNNER_TEMP/cert.p12"   # should not be 0 bytes
+          # Validate that OpenSSL can read the PKCS#12 with the provided password
+          openssl pkcs12 -in "$RUNNER_TEMP/cert.p12" \
+            -passin pass:"$IOS_CERT_PASSWORD" \
+            -info -nokeys >/dev/null
+
+          echo "Importing certificate into keychain…"
+          security import "$RUNNER_TEMP/cert.p12" \
+            -k "$KEYCHAIN" \
+            -P "$IOS_CERT_PASSWORD" \
+            -T /usr/bin/codesign
+
+          # Enable codesign tools to access the key
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PWD" "$KEYCHAIN"
+
+          # ---- Provisioning profile: decode + cms dump ----
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           PROFILE_PATH="$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision"
           echo "$IOS_PROVISION_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
 
-          # Extract profile values we need
           PROFILE_PLIST="$RUNNER_TEMP/profile.plist"
           /usr/bin/security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
           PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PROFILE_PLIST")
           TEAM_ID=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PROFILE_PLIST")
+          echo "Using profile: $PROFILE_NAME (Team: $TEAM_ID)"
 
           echo "PROFILE_NAME=$PROFILE_NAME" >> $GITHUB_OUTPUT
           echo "TEAM_ID=$TEAM_ID" >> $GITHUB_OUTPUT
@@ -98,6 +119,7 @@ jobs:
       # 7) Archive with signing
       - name: Archive iOS app
         run: |
+          set -euo pipefail
           cd "${{ steps.xcode.outputs.APP_DIR }}"
           xcodebuild \
             -scheme "${{ steps.scheme.outputs.SCHEME }}" \
@@ -111,10 +133,11 @@ jobs:
             -archivePath EoghanRua.xcarchive \
             archive
 
-      # 8) Create ExportOptions.plist WITHOUT a heredoc (no XML in YAML)
+      # 8) Create ExportOptions.plist via PlistBuddy (no XML heredoc inside YAML)
       - name: Create ExportOptions.plist
         id: exportopts
         run: |
+          set -euo pipefail
           PLIST="ExportOptions.plist"
           /usr/libexec/PlistBuddy -c "Add :method string ad-hoc" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :signingStyle string manual" "$PLIST"
@@ -122,15 +145,19 @@ jobs:
           /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:${{ env.BUNDLE_ID }} string ${{ steps.signing.outputs.PROFILE_NAME }}" "$PLIST"
           echo "PLIST_PATH=$(pwd)/$PLIST" >> $GITHUB_OUTPUT
+          echo "Created ExportOptions at $(pwd)/$PLIST"
+          /usr/libexec/PlistBuddy -c "Print" "$PLIST"
 
       # 9) Export the signed IPA
       - name: Export signed IPA
         run: |
+          set -euo pipefail
           cd "${{ steps.xcode.outputs.APP_DIR }}"
           xcodebuild -exportArchive \
             -archivePath EoghanRua.xcarchive \
             -exportPath export \
             -exportOptionsPlist "${{ steps.exportopts.outputs.PLIST_PATH }}"
+          ls -lh export || true
 
       # 10) Upload the IPA
       - name: Upload signed IPA
