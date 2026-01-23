@@ -61,7 +61,7 @@ jobs:
           echo "Using scheme: $SCHEME"
           echo "SCHEME=$SCHEME" >> $GITHUB_OUTPUT
 
-      # 6) Install signing assets in a temporary keychain (sanity checks + legacy PKCS#12 re-export)
+      # 6) Signing assets (sanity checks + legacy PKCS#12 re-export + profile UUID)
       - name: Set up signing
         id: signing
         env:
@@ -121,7 +121,7 @@ jobs:
             -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PWD" "$KEYCHAIN"
 
-          # Optional: list codesign identities for debugging (non-fatal)
+          # Optional: list codesign identities (debug)
           security find-identity -v -p codesigning "$KEYCHAIN" || true
 
           # ---- Provisioning profile ----
@@ -132,14 +132,16 @@ jobs:
           PROFILE_PLIST="$RUNNER_TEMP/profile.plist"
           /usr/bin/security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
           PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PROFILE_PLIST")
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PROFILE_PLIST")
           TEAM_ID=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PROFILE_PLIST")
-          echo "Using profile: $PROFILE_NAME (Team: $TEAM_ID)"
+          echo "Using profile: $PROFILE_NAME ($PROFILE_UUID) Team: $TEAM_ID"
 
           echo "PROFILE_NAME=$PROFILE_NAME" >> $GITHUB_OUTPUT
+          echo "PROFILE_UUID=$PROFILE_UUID" >> $GITHUB_OUTPUT
           echo "TEAM_ID=$TEAM_ID" >> $GITHUB_OUTPUT
           echo "KEYCHAIN=$KEYCHAIN" >> $GITHUB_OUTPUT
 
-      # 7) Archive with signing
+      # 7) Archive with explicit Distribution identity + profile (name + UUID)
       - name: Archive iOS app
         run: |
           set -euo pipefail
@@ -151,7 +153,10 @@ jobs:
             -destination 'generic/platform=iOS' \
             DEVELOPMENT_TEAM="${{ steps.signing.outputs.TEAM_ID }}" \
             CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            CODE_SIGN_IDENTITY[sdk=iphoneos*]="Apple Distribution" \
             PROVISIONING_PROFILE_SPECIFIER="${{ steps.signing.outputs.PROFILE_NAME }}" \
+            PROVISIONING_PROFILE="${{ steps.signing.outputs.PROFILE_UUID }}" \
             OTHER_CODE_SIGN_FLAGS="--keychain ${{ steps.signing.outputs.KEYCHAIN }}" \
             -archivePath EoghanRua.xcarchive \
             archive
