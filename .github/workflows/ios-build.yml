@@ -70,10 +70,11 @@ jobs:
           echo "SCHEME=$APP_NAME" >> $GITHUB_OUTPUT
 
       # 7) Archive (unsigned). We stay *inside* the Xcode dir Briefcase generated.
-      - name: Archive Xcode Project (unsigned, no signing)
+     
+      # Build device app in Release, with signing disabled
+      - name: Build iOS Release (device, no signing)
         run: |
           cd "${{ steps.findapp.outputs.APP_DIR }}"
-          # Build a generic *device* archive, but turn off signing checks:
           xcodebuild \
             -scheme "${{ steps.scheme.outputs.SCHEME }}" \
             -configuration Release \
@@ -81,16 +82,28 @@ jobs:
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM= \
-            -archivePath EoghanRua.xcarchive \
-            archive
+            build
 
+      # Find the built .app under xcode/build/Release-iphoneos
+      - name: Locate built .app (Release-iphoneos)
+        id: findappbundle
+        run: |
+          APP_BUNDLE=$(find "${{ steps.findapp.outputs.APP_DIR }}/build" -type d -name "*.app" -path "*Release-iphoneos*" | head -n 1)
+          echo "Found app: $APP_BUNDLE"
+          if [ -z "$APP_BUNDLE" ]; then
+            echo "ERROR: Could not find Release-iphoneos .app under ${ { steps.findapp.outputs.APP_DIR } }/build"
+            exit 1
+          fi
+          echo "APP_BUNDLE=$APP_BUNDLE" >> $GITHUB_OUTPUT
 
-      # 8) Upload the archive as a downloadable artifact
-      - name: Upload unsigned Xcode archive
-        uses: actions/upload-artifact@v4
-        with:
-          name: EoghanRua-xcarchive
-          path: ${{ steps.findapp.outputs.APP_DIR }}/EoghanRua.xcarchive
+      # Zip and upload the .app as an artifact (unsigned)
+      - name: Upload unsigned .app
+        run: |
+          cd "$(dirname "${{ steps.findapp.outputs.APP_DIR }}")"
+          zip -r EoghanRua-Release-iphoneos.app.zip "${{ steps.findapp.outputs.APP_DIR }}/build/Release-iphoneos/${{ steps.scheme.outputs.SCHEME }}.app" \
+            || zip -r EoghanRua-Release-iphoneos.app.zip "${{ steps.findappbundle.outputs.APP_BUNDLE }}"
+        shell: bash
 
 
