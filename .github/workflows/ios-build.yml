@@ -1,19 +1,26 @@
 
-name: iOS Build (BeeWare Briefcase)
+name: iOS Build & Sign (BeeWare Briefcase)
 
 on:
-  workflow_dispatch:   # Manual trigger
+  workflow_dispatch:
 
 jobs:
   build-ios:
     runs-on: macos-latest
 
+    env:
+      BUNDLE_ID: ie.eoghanrua.eoghan-rua-team-selector
+
     steps:
-      # 1) Get code
+      # ------------------------------------------------------------
+      # Checkout
+      # ------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2) Python for Briefcase
+      # ------------------------------------------------------------
+      # Python + Briefcase
+      # ------------------------------------------------------------
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -24,74 +31,47 @@ jobs:
           python -m pip install --upgrade pip
           pip install briefcase
 
-      # 3) Sanity check: pyproject.toml must be in repo root
-      - name: Verify pyproject.toml exists
-        run: |
-          if [ ! -f "pyproject.toml" ]; then
-            echo "pyproject.toml not found!"
-            exit 1
-          fi
-          echo "pyproject.toml found."
-
-      # 4) Create and build with Briefcase
+      # ------------------------------------------------------------
+      # Build iOS project with Briefcase
+      # ------------------------------------------------------------
       - name: Create iOS Project
-        run: |
-          briefcase create iOS
+        run: briefcase create iOS
 
       - name: Build iOS App
-        run: |
-          briefcase build iOS
+        run: briefcase build iOS
 
-      # 5) NEW: Auto-detect Xcode folder under build/<app>/ios/xcode
-      - name: Locate Xcode iOS directory
-        id: findapp
+      # ------------------------------------------------------------
+      # Locate Xcode project directory
+      # ------------------------------------------------------------
+      - name: Locate Xcode directory
+        id: xcode
         run: |
-          echo "Searching for Xcode iOS build directory..."
           APP_DIR=$(find build -type d -name "xcode" | head -n 1)
-          echo "Found: $APP_DIR"
           if [ -z "$APP_DIR" ]; then
-            echo "ERROR: Xcode directory not found under build/."
-            echo "TIP: Check the 'Create iOS Project' and 'Build iOS App' logs for the actual path."
+            echo "ERROR: Xcode directory not found under build/"
             exit 1
           fi
           echo "APP_DIR=$APP_DIR" >> $GITHUB_OUTPUT
 
-      # 6) Derive the scheme from the built .app name (e.g. 'Eoghan Rua Team Selector.app' -> scheme)
-      - name: Extract scheme name from .app
+      # ------------------------------------------------------------
+      # Determine scheme from .app name
+      # ------------------------------------------------------------
+      - name: Determine scheme
         id: scheme
         run: |
-          APP_PATH=$(find "${{ steps.findapp.outputs.APP_DIR }}" -type d -name "*.app" | head -n 1)
+          APP_PATH=$(find "${{ steps.xcode.outputs.APP_DIR }}" -type d -name "*.app" | head -n 1)
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: No .app found inside ${{ steps.findapp.outputs.APP_DIR }}."
+            echo "ERROR: No .app found to infer scheme"
             exit 1
           fi
-          APP_NAME=$(basename "$APP_PATH" ".app")
-          echo "Scheme: $APP_NAME"
-          echo "SCHEME=$APP_NAME" >> $GITHUB_OUTPUT
+          SCHEME=$(basename "$APP_PATH" .app)
+          echo "Using scheme: $SCHEME"
+          echo "SCHEME=$SCHEME" >> $GITHUB_OUTPUT
 
-      # 7) Archive (unsigned). We stay *inside* the Xcode dir Briefcase generated.
-     
-     
-      # Build device app in Release, with signing disabled, and force a local DerivedData path
-      - name: Build iOS Release (device, no signing)
-        run: |
-          cd "${{ steps.findapp.outputs.APP_DIR }}"
-          xcodebuild \
-            -scheme "${{ steps.scheme.outputs.SCHEME }}" \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            DEVELOPMENT_TEAM= \
-            -derivedDataPath build/derived \
-            build
-
-      # Find the built .app under the forced DerivedData products dir
-      
-      # Set up a temporary keychain and install signing assets
-      - name: Set up signing (cert + profile)
+      # ------------------------------------------------------------
+      # Install signing certificate + provisioning profile
+      # ------------------------------------------------------------
+      - name: Set up signing
         id: signing
         env:
           IOS_CERT_BASE64: ${{ secrets.IOS_CERT_BASE64 }}
@@ -109,16 +89,21 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN"
 
           echo "$IOS_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$IOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security import "$RUNNER_TEMP/cert.p12" \
+            -k "$KEYCHAIN" \
+            -P "$IOS_CERT_PASSWORD" \
+            -T /usr/bin/codesign
 
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PWD" "$KEYCHAIN"
 
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           PROFILE_PATH="$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision"
           echo "$IOS_PROVISION_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
 
           PROFILE_PLIST="$RUNNER_TEMP/profile.plist"
-          /usr/bin/security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
+          security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
 
           PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PROFILE_PLIST")
           TEAM_ID=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PROFILE_PLIST")
@@ -127,10 +112,13 @@ jobs:
           echo "TEAM_ID=$TEAM_ID" >> $GITHUB_OUTPUT
           echo "KEYCHAIN=$KEYCHAIN" >> $GITHUB_OUTPUT
 
-      # Archive the app (signed)
+      # ------------------------------------------------------------
+      # Archive app (signed)
+      # ------------------------------------------------------------
       - name: Archive iOS app
         run: |
-          cd "${{ steps.findapp.outputs.APP_DIR }}"
+          cd "${{ steps.xcode.outputs.APP_DIR }}"
+
           xcodebuild \
             -scheme "${{ steps.scheme.outputs.SCHEME }}" \
             -configuration Release \
@@ -143,35 +131,44 @@ jobs:
             -archivePath EoghanRua.xcarchive \
             archive
 
-      # Export signed IPA
+      # ------------------------------------------------------------
+      # Export IPA
+      # ------------------------------------------------------------
       - name: Export signed IPA
         run: |
-          cd "${{ steps.findapp.outputs.APP_DIR }}"
+          cd "${{ steps.xcode.outputs.APP_DIR }}"
 
           cat > ExportOptions.plist <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <plist version="1.0">
-            <dict>
-              <key>method</key><string>ad-hoc</string>
-              <key>signingStyle</key><string>manual</string>
-              <key>teamID</key><string>${{ steps.signing.outputs.TEAM_ID }}</string>
-              <key>provisioningProfiles</key>
-              <dict>
-                <key>ie.eoghanrua.eoghan-rua-team-selector</key>
-                <string>${{ steps.signing.outputs.PROFILE_NAME }}</string>
-              </dict>
-            </dict>
-          </plist>
-          EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+ "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>method</key>
+    <string>ad-hoc</string>
+    <key>signingStyle</key>
+    <string>manual</string>
+    <key>teamID</key>
+    <string>${{ steps.signing.outputs.TEAM_ID }}</string>
+    <key>provisioningProfiles</key>
+    <dict>
+      <key>${{ env.BUNDLE_ID }}</key>
+      <string>${{ steps.signing.outputs.PROFILE_NAME }}</string>
+    </dict>
+  </dict>
+</plist>
+EOF
 
           xcodebuild -exportArchive \
             -archivePath EoghanRua.xcarchive \
-                       -exportOptionsPlist ExportOptions.plist
+            -exportPath export \
+            -exportOptionsPlist ExportOptions.plist
 
-      # Upload IPA
+      # ------------------------------------------------------------
+      # Upload IPA artifact
+      # ------------------------------------------------------------
       - name: Upload signed IPA
         uses: actions/upload-artifact@v4
         with:
           name: EoghanRua-AdHoc-IPA
-          path: ${{ steps.findapp.outputs.APP_DIR }}/export/*.ipa
-
+          path: ${{ steps.xcode.outputs.APP_DIR }}/export/*.ipa
