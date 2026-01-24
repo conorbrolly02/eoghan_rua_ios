@@ -1,32 +1,48 @@
 
+[project]
+name = "eoghan_rua_team_selector"
+version = "1.0.0"
+description = "Offline team selector app for Eoghan Rua GAA."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Eoghan Rua GAA", email = "info@eoghanrua.ie" }]
+license = { file = "LICENSE" }   # PEP 621 format; remove any old `license = "Proprietary"`
+
+# Optional but recommended fields
+homepage = "https://eoghanrua.ie"
+
 [tool.briefcase]
 project_name = "Eoghan Rua Team Selector"
 bundle = "ie.eoghanrua"
-version = "1.0.0"
 url = "https://eoghanrua.ie"
-license = "Proprietary"
-author = "Eoghan Rua GAA"
-author_email = "info@eoghanrua.ie"
-description = "Offline team selector app for Eoghan Rua GAA."
-formal_name = "Eoghan Rua Team Selector"
-app_name = "eoghan_rua_team_selector"
-
-
 sources = ["eoghan_rua_team_selector"]
 
 [tool.briefcase.app.eoghan_rua_team_selector]
-module  = "eoghan_rua_team_selector.app"
-icon    = "assets/icon.png"
-splash  = "assets/splash.png"
-requires = ["toga-ios>=0.4.7","std-nslog>=1.0.0"]
+formal_name = "Eoghan Rua Team Selector"
+description = "Offline team selector app for Eoghan Rua GAA."
+app_name = "eoghan_rua_team_selector"
+
+# 👇 Your iOS entry point (contains EoghanRuaApp + main())
+module = "eoghan_rua_team_selector.app"
+
+# 👇 Branding assets in your repo
+icon   = "assets/icon.png"
+splash = "assets/splash.png"
+
+# 👇 Files you load at runtime with: Path(app.paths.app) / "resources" / "crest.png"
 resources = ["assets/crest.png"]
 
+# 👇 App dependencies (single, merged list — no duplicates)
+#    - std-nslog routes Python prints/tracebacks to iOS NSLog (so you’ll see them in idevicesyslog)
+#    - Pillow and XlsxWriter match what you installed earlier
+#    - toga-ios pulls in the correct toga/rubicon versions for iOS
 requires = [
-    "toga>=0.4.7",
-    "rubicon-objc>=0.4.7",
-    "XlsxWriter>=3.1.9",
+    "toga-ios>=0.4.7",
+    "std-nslog>=1.0.0",
     "Pillow>=10.0.0",
+    "XlsxWriter>=3.1.9"
 ]
 
-[tool.briefcase.app.eoghan_rua_team_selector]
-formal_name = "Eoghan Rua Team Selector"
+# (Optional) If you later need platform-specific customizations, you can add:
+# [tool.briefcase.app.eoghan_rua_team_selector.iOS]
+#   # iOS-specific settings go here
