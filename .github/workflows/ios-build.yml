@@ -1,102 +1,263 @@
 
-# app.py
-import sys
-import os
-import traceback
+name: iOS Build & Sign (BeeWare Briefcase)
 
-import toga
-from rubicon.objc import NSLog  # Write to iOS system log (visible via idevicesyslog)
+on:
+  workflow_dispatch:
 
-# ---------------------------------------------------------------------
-# iOS bundle is read-only; prevent .pyc writes and any bytecode attempts
-# ---------------------------------------------------------------------
-sys.dont_write_bytecode = True
-os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+jobs:
+  build-ios:
+    runs-on: macos-latest
 
+    env:
+      BUNDLE_ID: ie.eoghanrua.eoghan-rua-team-selector
 
-class EoghanRuaApp(toga.App):
-    def startup(self):
-        """
-        App entry point for iOS. We:
-          1) Log to iOS syslog so we can see what's happening.
-          2) Lazy-import Splash so any import-time issues are caught here.
-          3) Handle either a Window-returning Splash or a widget-returning Splash.
-          4) Show a visible fallback window on error, with the exception text.
-        """
-        NSLog("EoghanRuaApp.startup() begin")
+    steps:
+      # 1) Checkout
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-        try:
-            # Lazy import so import errors are caught and logged below
-            from eoghan_rua_team_selector.views.splash import Splash
+      # 2) Python + Briefcase
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-            # Build first view/screen. Works whether Splash returns a Window or a widget.
-            content = Splash(self)
+      - name: Install Briefcase
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install briefcase
 
-            if isinstance(content, toga.Window):
-                # Splash is a Window (e.g., toga.MainWindow subclass)
-                self.main_window = content
-            else:
-                # Splash is a widget/layout: mount into a MainWindow
-                self.main_window = toga.MainWindow(title=self.formal_name)
-                self.main_window.content = content
+      # 3) Create & build with Briefcase (uses pyproject.toml: module, requires, resources)
+      - name: Create iOS Project
+        run: |
+          set -euo pipefail
+          briefcase create iOS
 
-            self.main_window.show()
-            NSLog("EoghanRuaApp.startup() success: window shown")
+      - name: Build iOS App
+        run: |
+          set -euo pipefail
+          briefcase build iOS
 
-        except Exception as exc:
-            # Log full traceback to the iOS system log and present a visible error window
-            tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-            NSLog(f"Startup Exception: {exc}\n{tb}")
+      # 4) Locate Xcode dir produced by Briefcase (build/<app>/ios/xcode)
+      - name: Locate Xcode directory
+        id: xcode
+        run: |
+          set -euo pipefail
+          APP_DIR=$(find build -type d -name "xcode" | head -n 1)
+          if [ -z "$APP_DIR" ]; then
+            echo "ERROR: Xcode directory not found under build/"
+            exit 1
+          fi
+          echo "Found Xcode dir: $APP_DIR"
+          echo "APP_DIR=$APP_DIR" >> $GITHUB_OUTPUT
 
-            self.main_window = toga.MainWindow(title=f"{self.formal_name} – Startup Error")
-            self.main_window.content = toga.Label(
-                f"Startup error:\n{exc}\n\nSee device log for details.",
-                style=toga.style.Pack(padding=20),
-            )
-            self.main_window.show()
+      # 5) Determine scheme from the .app name
+      - name: Determine scheme
+        id: scheme
+        run: |
+          set -euo pipefail
+          APP_PATH=$(find "${{ steps.xcode.outputs.APP_DIR }}" -type d -name "*.app" | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: No .app found to infer scheme"
+            exit 1
+          fi
+          SCHEME=$(basename "$APP_PATH" .app)
+          echo "Using scheme: $SCHEME"
+          echo "SCHEME=$SCHEME" >> $GITHUB_OUTPUT
 
-    # ---------------------------------------------------------
-    # Navigation helpers: swap content or replace the window
-    # ---------------------------------------------------------
-    def goto_home(self):
-        from eoghan_rua_team_selector.views.home import Home
-        content = Home(self)
-        if isinstance(content, toga.Window):
-            self.main_window = content
-        else:
-            self.main_window.content = content
-        self.main_window.show()
+      # 6) Signing assets (sanity checks + legacy PKCS#12 re-export + profile UUID)
+      - name: Set up signing
+        id: signing
+        env:
+          IOS_CERT_BASE64: ${{ secrets.IOS_CERT_BASE64 }}
+          IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
+          IOS_PROVISION_PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
 
-    def goto_builder(self):
-        from eoghan_rua_team_selector.views.builder import Builder
-        content = Builder(self)
-        if isinstance(content, toga.Window):
-            self.main_window = content
-        else:
-            self.main_window.content = content
-        self.main_window.show()
+          echo "Creating temp keychain…"
+          KEYCHAIN="$RUNNER_TEMP/ios-signing.keychain-db"
+          KEYCHAIN_PWD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN"
 
-    def goto_preview(self, teams, crest_bytes):
-        from eoghan_rua_team_selector.views.preview import Preview
-        content = Preview(self, teams, crest_bytes)
-        if isinstance(content, toga.Window):
-            self.main_window = content
-        else:
-            self.main_window.content = content
-        self.main_window.show()
+          # ---- Decode original PKCS#12 and sanity-check with OpenSSL ----
+          echo "$IOS_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          echo "Verifying original PKCS#12…"
+          ls -lh "$RUNNER_TEMP/cert.p12"
+          wc -c  "$RUNNER_TEMP/cert.p12"
+          openssl pkcs12 -in "$RUNNER_TEMP/cert.p12" \
+            -passin pass:"$IOS_CERT_PASSWORD" \
+            -info -nokeys >/dev/null
 
+          # ---- Convert to PEM (cert + key), then re-export as legacy PKCS#12 ----
+          openssl pkcs12 -in "$RUNNER_TEMP/cert.p12" \
+            -passin pass:"$IOS_CERT_PASSWORD" \
+            -nodes -out "$RUNNER_TEMP/cert_and_key.pem"
 
-def main():
-    """
-    Briefcase calls main(); returning the App is sufficient.
-    Providing explicit ids/names is good practice on iOS.
-    """
-    return EoghanRuaApp(
-        app_id="ie.eoghanrua.eoghan-rua-team-selector",
-        app_name="Eoghan Rua Team Selector",
-        formal_name="Eoghan Rua Team Selector",
-    )
+          if openssl pkcs12 -export -legacy \
+               -in  "$RUNNER_TEMP/cert_and_key.pem" \
+               -out "$RUNNER_TEMP/cert_legacy.p12" \
+               -name "Apple Distribution" \
+               -passout pass:"$IOS_CERT_PASSWORD" 2>/dev/null; then
+            echo "Re-exported PKCS#12 using -legacy."
+          else
+            echo "OpenSSL lacks -legacy; using explicit legacy algorithms…"
+            openssl pkcs12 -export \
+              -in  "$RUNNER_TEMP/cert_and_key.pem" \
+              -out "$RUNNER_TEMP/cert_legacy.p12" \
+              -name "Apple Distribution" \
+              -passout pass:"$IOS_CERT_PASSWORD" \
+              -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES \
+              -macalg sha1 -nomaciter
+          fi
 
-# For local debugging outside Briefcase, you could run:
-# if __name__ == "__main__":
-#     main().main_loop()
+          echo "Importing legacy PKCS#12 into keychain…"
+          security import "$RUNNER_TEMP/cert_legacy.p12" \
+            -k "$KEYCHAIN" \
+            -P "$IOS_CERT_PASSWORD" \
+            -T /usr/bin/codesign
+
+          # Allow codesign access
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PWD" "$KEYCHAIN"
+
+          # Optional: list codesign identities (debug)
+          security find-identity -v -p codesigning "$KEYCHAIN" || true
+
+          # ---- Provisioning profile ----
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          PROFILE_PATH="$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision"
+          echo "$IOS_PROVISION_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+
+          PROFILE_PLIST="$RUNNER_TEMP/profile.plist"
+          /usr/bin/security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
+          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PROFILE_PLIST")
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PROFILE_PLIST")
+          TEAM_ID=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PROFILE_PLIST")
+          echo "Using profile: $PROFILE_NAME ($PROFILE_UUID) Team: $TEAM_ID"
+
+          echo "PROFILE_NAME=$PROFILE_NAME" >> $GITHUB_OUTPUT
+          echo "PROFILE_UUID=$PROFILE_UUID" >> $GITHUB_OUTPUT
+          echo "TEAM_ID=$TEAM_ID" >> $GITHUB_OUTPUT
+          echo "KEYCHAIN=$KEYCHAIN" >> $GITHUB_OUTPUT
+
+      # 7) Archive (manual signing parameters)
+      - name: Archive iOS app
+        run: |
+          set -euo pipefail
+          cd "${{ steps.xcode.outputs.APP_DIR }}"
+          xcodebuild \
+            -scheme "${{ steps.scheme.outputs.SCHEME }}" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            DEVELOPMENT_TEAM="${{ steps.signing.outputs.TEAM_ID }}" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="${{ steps.signing.outputs.PROFILE_NAME }}" \
+            PROVISIONING_PROFILE="${{ steps.signing.outputs.PROFILE_UUID }}" \
+            OTHER_CODE_SIGN_FLAGS="--keychain ${{ steps.signing.outputs.KEYCHAIN }}" \
+            -archivePath EoghanRua.xcarchive \
+            archive
+
+      # 8) Re-sign nested code (no entitlements) -> embed profile -> re-sign app LAST (with app entitlements)
+      - name: Finalize signing order (frameworks → embed profile → app)
+        run: |
+          set -euo pipefail
+          APP="${{ steps.xcode.outputs.APP_DIR }}/EoghanRua.xcarchive/Products/Applications/${{ steps.scheme.outputs.SCHEME }}.app"
+          KEYCHAIN="${{ steps.signing.outputs.KEYCHAIN }}"
+
+          IDENTITY_HASH=$(security find-identity -v -p codesigning "$KEYCHAIN" | awk '/Apple Distribution/ {print $2; exit}')
+          if [ -z "$IDENTITY_HASH" ]; then
+            echo "ERROR: Apple Distribution identity not found"
+            exit 1
+          fi
+          echo "Using identity: $IDENTITY_HASH"
+
+          # Extract current app entitlements (used only for app final sign)
+          ENT_APP="$RUNNER_TEMP/app_ents.plist"
+          codesign -d --entitlements :- "$APP" > "$ENT_APP" 2>/dev/null || true
+
+          echo "Re-signing Frameworks (*.framework) WITHOUT entitlements…"
+          find "$APP/Frameworks" -maxdepth 1 -type d -name "*.framework" 2>/dev/null | while read -r FW; do
+            echo "  sign $FW"
+            codesign --force --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" "$FW"
+          done
+
+          echo "Re-signing Mach-O files (*.dylib, *.so, executables) WITHOUT entitlements…"
+          while IFS= read -r F; do
+            if file "$F" | grep -q "Mach-O"; then
+              echo "  sign $F"
+              codesign --force --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" "$F"
+            fi
+          done < <(find "$APP" -type f \( -name "*.dylib" -o -name "*.so" -o -perm -111 \) 2>/dev/null)
+
+          echo "Embedding provisioning profile before app sign…"
+          cp "$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision" "$APP/embedded.mobileprovision"
+
+          echo "Re-signing APP bundle LAST with entitlements…"
+          codesign --force --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" --entitlements "$ENT_APP" "$APP"
+
+      # 9) Verify deep signature in the archive (should be clean) + assert crest resource
+      - name: Verify code signatures (archive) & crest resource
+        run: |
+          set -euo pipefail
+          APP="${{ steps.xcode.outputs.APP_DIR }}/EoghanRua.xcarchive/Products/Applications/${{ steps.scheme.outputs.SCHEME }}.app"
+          echo "Verifying deep signatures in archive…"
+          codesign -vvv --deep --strict "$APP"
+
+          echo "App entitlements (for info):"
+          codesign -d --entitlements :- "$APP" 2>/dev/null || true
+
+          echo "Checking resources/crest.png presence…"
+          if [ -f "$APP/resources/crest.png" ]; then
+            echo "OK: crest.png found at $APP/resources/crest.png"
+          else
+            echo "WARNING: crest.png not found under $APP/resources/"
+            # If you want to fail on missing resource, uncomment:
+            # exit 1
+          fi
+
+      # 10) Manual IPA packaging (avoid re-signing by xcodebuild -exportArchive)
+      - name: Package IPA manually
+        id: manualipa
+        run: |
+          set -euo pipefail
+          APP_ROOT="${{ steps.xcode.outputs.APP_DIR }}/EoghanRua.xcarchive/Products/Applications"
+          OUT="${{ steps.xcode.outputs.APP_DIR }}/manual_export"
+          mkdir -p "$OUT/Payload"
+          cp -R "$APP_ROOT/${{ steps.scheme.outputs.SCHEME }}.app" "$OUT/Payload/"
+          (cd "$OUT" && zip -qry "EoghanRua-AdHoc-Manual.ipa" Payload)
+          echo "IPA_PATH=$OUT/EoghanRua-AdHoc-Manual.ipa" >> $GITHUB_OUTPUT
+          ls -lh "$OUT"
+
+      # 11) Verify deep signature inside the IPA (final safety)
+      - name: Verify IPA content signatures
+        run: |
+          set -euo pipefail
+          TMPDIR=$(mktemp -d)
+          cp "${{ steps.manualipa.outputs.IPA_PATH }}" "$TMPDIR/app.ipa"
+          cd "$TMPDIR"
+          unzip -q app.ipa
+          APP="Payload/${{ steps.scheme.outputs.SCHEME }}.app"
+          echo "Verifying deep signatures in IPA…"
+          codesign -vvv --deep --strict "$APP" || (echo "Deep verify FAILED inside IPA" && exit 1)
+          echo "Entitlements (IPA content):"
+          codesign -d --entitlements :- "$APP" 2>/dev/null || true
+          if [ -f "$APP/resources/crest.png" ]; then
+            echo "OK: crest.png present inside IPA"
+          else
+            echo "WARNING: crest.png missing inside IPA resources/"
+          fi
+
+      # 12) Upload IPA
+      - name: Upload IPA (Manual)
+        uses: actions/upload-artifact@v4
+        with:
+          name: EoghanRua-AdHoc-IPA-Manual
+          path: ${{ steps.manualipa.outputs.IPA_PATH }}
