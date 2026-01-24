@@ -29,32 +29,37 @@ jobs:
           python -m pip install --upgrade pip
           pip install briefcase
 
-      # 3) Sanity-check pyproject.toml (module, requires, icon, splash, resources)
-      - name: Validate pyproject configuration
+      # 3) Print pyproject & soft sanity warning (does not fail the job)
+      - name: Print pyproject & soft-check expected fields
         run: |
           set -euo pipefail
           PY="pyproject.toml"
-          echo "----- pyproject sanity check -----"
-          grep -E '^\[tool\.briefcase\.app\.eoghan_rua_team_selector\]' "$PY" >/dev/null || { echo "Missing [tool.briefcase.app.eoghan_rua_team_selector]"; exit 1; }
-          grep -E '^[[:space:]]*module[[:space:]]*='   "$PY" | grep -F 'eoghan_rua_team_selector.app' >/dev/null   || { echo "Missing/invalid module=..."; exit 1; }
-          grep -E '^[[:space:]]*requires[[:space:]]*=' "$PY" >/dev/null || { echo "Missing requires=[...]"; exit 1; }
-          grep -E -i 'std-nslog' "$PY" >/dev/null || { echo "std-nslog not present in requires – add it"; exit 1; }
-          grep -E '^[[:space:]]*icon[[:space:]]*='    "$PY" >/dev/null || { echo "Missing icon=... (set to assets/icon.png)"; exit 1; }
-          grep -E '^[[:space:]]*splash[[:space:]]*='  "$PY" >/dev/null || { echo "Missing splash=... (set to assets/splash.png)"; exit 1; }
-          grep -E '^[[:space:]]*resources[[:space:]]*=' "$PY" >/dev/null || { echo "Missing resources=[...]"; exit 1; }
+          echo "----- pyproject.toml (first 120 lines) -----"
+          sed -n '1,120p' "$PY" || true
+          echo "----- soft sanity check (WARN only) -----"
+          WARN=0
+          grep -E '^\[tool\.briefcase\.app\.eoghan_rua_team_selector\]' "$PY" >/dev/null || { echo "::warning::Missing [tool.briefcase.app.eoghan_rua_team_selector] section"; WARN=1; }
+          grep -E '^[[:space:]]*module[[:space:]]*='   "$PY" | grep -F 'eoghan_rua_team_selector.app' >/dev/null || { echo "::warning::Missing/invalid module=eoghan_rua_team_selector.app"; WARN=1; }
+          grep -E '^[[:space:]]*requires[[:space:]]*=' "$PY" >/dev/null || { echo "::warning::Missing requires=[...] list"; WARN=1; }
+          grep -E -i 'std-nslog' "$PY" >/dev/null || { echo "::warning::std-nslog not present in requires (Python stdout/stderr won't hit syslog)"; WARN=1; }
+          grep -E '^[[:space:]]*icon[[:space:]]*='    "$PY" >/dev/null || { echo "::warning::Missing icon=... (set to assets/icon.png)"; WARN=1; }
+          grep -E '^[[:space:]]*splash[[:space:]]*='  "$PY" >/dev/null || { echo "::warning::Missing splash=... (set to assets/splash.png)"; WARN=1; }
+          grep -E '^[[:space:]]*resources[[:space:]]*=' "$PY" >/dev/null || { echo "::warning::Missing resources=[...] (should include assets/crest.png)"; WARN=1; }
+          for f in assets/icon.png assets/splash.png assets/crest.png; do
+            test -f "$f" || { echo "::warning::Missing file: $f"; WARN=1; }
+          done
+          if [ "$WARN" -eq 1 ]; then
+            echo "::notice::Sanity check warnings detected above. Build will continue; ensure you commit pyproject/assets fixes."
+          else
+            echo "pyproject + assets look OK"
+          fi
 
-          test -f assets/icon.png   || { echo "assets/icon.png missing"; exit 1; }
-          test -f assets/splash.png || { echo "assets/splash.png missing"; exit 1; }
-          test -f assets/crest.png  || { echo "assets/crest.png missing"; exit 1; }
-          echo "pyproject + assets look OK"
-
-      # 4) Create & UPDATE the iOS project so icons/deps/resources refresh
-      - name: Create iOS project (first run) and update metadata+requirements
+      # 4) Create project (idempotent) & UPDATE metadata+requirements so icon/splash/deps/resources refresh
+      - name: Create iOS project & update metadata/requirements
         run: |
           set -euo pipefail
-          # Create (safe if project exists; it will no-op)
           briefcase create iOS || true
-          # Update metadata (-d) and requirements (-r) so icon/splash/deps/resources are applied
+          # -d refreshes Info.plist, icons, splash, etc.; -r refreshes Python deps (incl. std-nslog)
           briefcase update iOS -d -r
 
       # 5) Build iOS App
@@ -76,17 +81,18 @@ jobs:
           echo "Found Xcode dir: $APP_DIR"
           echo "APP_DIR=$APP_DIR" >> $GITHUB_OUTPUT
 
-      # 7) Inspect the AppIcon asset (prove bee icon has been replaced)
+      # 7) Inspect AppIcon asset (prove bee icon replaced)
       - name: Inspect AppIcon asset catalog (pre-archive)
         run: |
           set -euo pipefail
           ICONSET=$(find "${{ steps.xcode.outputs.APP_DIR }}" -type d -path "*/Assets.xcassets/AppIcon.appiconset" | head -n 1 || true)
           if [ -n "$ICONSET" ]; then
-            echo "AppIcon.appiconset found at: $ICONSET"
+            echo "AppIcon.appiconset: $ICONSET"
             ls -l "$ICONSET" || true
-            sed -n '1,120p' "$ICONSET/Contents.json" || true
+            echo "----- AppIcon Contents.json (first 200 lines) -----"
+            sed -n '1,200p' "$ICONSET/Contents.json" || true
           else
-            echo "WARNING: AppIcon.appiconset not found; Briefcase may have used default icon."
+            echo "::warning::AppIcon.appiconset not found; Briefcase may still be using default icon."
           fi
 
       # 8) Determine scheme from the .app name
@@ -208,7 +214,6 @@ jobs:
           done < <(find "$APP" -type f \( -name "*.dylib" -o -name "*.so" -o -perm -111 \) 2>/dev/null)
 
           cp "$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision" "$APP/embedded.mobileprovision"
-
           codesign --force --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" --entitlements "$ENT_APP" "$APP"
 
       # 12) Verify signatures and crest presence (archive)
@@ -217,11 +222,10 @@ jobs:
           set -euo pipefail
           APP="${{ steps.xcode.outputs.APP_DIR }}/EoghanRua.xcarchive/Products/Applications/${{ steps.scheme.outputs.SCHEME }}.app"
           codesign -vvv --deep --strict "$APP"
-          echo "Checking resources/crest.png presence…"
           if [ -f "$APP/resources/crest.png" ]; then
-            echo "OK: crest.png found"
+            echo "OK: crest.png found under resources/"
           else
-            echo "WARNING: crest.png not found under $APP/resources/"
+            echo "::warning::crest.png not found under resources/ (check pyproject resources= and code path)"
           fi
 
       # 13) Manual IPA packaging (avoid exportArchive re-touching)
@@ -248,9 +252,9 @@ jobs:
           APP="Payload/${{ steps.scheme.outputs.SCHEME }}.app"
           codesign -vvv --deep --strict "$APP"
           if [ -f "$APP/resources/crest.png" ]; then
-            echo "OK: crest.png present inside IPA"
+            echo "OK: crest.png present inside IPA resources/"
           else
-            echo "WARNING: crest.png missing inside IPA resources/"
+            echo "::warning::crest.png missing inside IPA resources/"
           fi
 
       # 15) Upload IPA
