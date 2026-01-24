@@ -14,8 +14,12 @@ app_name = "eoghan_rua_team_selector"
 
 sources = ["eoghan_rua_team_selector"]
 
-icon = "assets/icon.png"
-splash = "assets/splash.png"
+[tool.briefcase.app.eoghan_rua_team_selector]
+module  = "eoghan_rua_team_selector.app"
+icon    = "assets/icon.png"
+splash  = "assets/splash.png"
+requires = ["toga-ios>=0.4.7","std-nslog>=1.0.0"]
+resources = ["assets/crest.png"]
 
 requires = [
     "toga>=0.4.7",
