@@ -1,28 +1,44 @@
 
-import os
+# eoghan_rua_team_selector/views/splash.py
+from pathlib import Path
+from rubicon.objc import NSLog
 import toga
 from toga.style import Pack
-from toga.style.pack import COLUMN
-
-ASSETS = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "assets")
-
+from toga.style.pack import COLUMN, CENTER
 
 class Splash(toga.MainWindow):
     def __init__(self, app):
-        super().__init__(title="Eoghan Rua — Team Selector", size=(420, 640))
+        # On iOS, MainWindow is full-screen; size=... is ignored and sometimes confusing.
+        super().__init__(title="Eoghan Rua — Team Selector")
         self.app = app
 
-        box = toga.Box(style=Pack(direction=COLUMN, alignment="center", padding=20))
+        NSLog("Splash: building view")
 
-        crest_path = os.path.join(ASSETS, "crest.png")
-        if os.path.exists(crest_path):
-            img = toga.Image(crest_path)
-            box.add(toga.ImageView(img, style=Pack(height=180, width=180)))
+        # --- Locate resources safely on iOS ---
+        # Briefcase copies your declared resources into <app bundle>/resources/
+        resources = Path(app.paths.app) / "resources"
+
+        # UI layout
+        box = toga.Box(style=Pack(direction=COLUMN, alignment=CENTER, padding=20,
+                                  width=toga.FLEX, height=toga.FLEX))
+
+        crest_path = resources / "crest.png"
+        if crest_path.exists():
+            try:
+                img = toga.Image(crest_path)
+                box.add(toga.ImageView(img, style=Pack(height=180, width=180)))
+            except Exception as exc:
+                NSLog(f"Splash: failed to load crest.png: {exc}")
 
         box.add(toga.Label("Eoghan Rua — Team Selector", style=Pack(font_size=20, padding_top=10)))
 
         box.add(
-            toga.Button("Continue", on_press=lambda w: self.app.goto_home(), style=Pack(padding_top=20))
+            toga.Button(
+                "Continue",
+                on_press=lambda w: self.app.goto_home(),
+                style=Pack(padding_top=20, width=200),
+            )
         )
 
         self.content = box
+        NSLog("Splash: view ready")
