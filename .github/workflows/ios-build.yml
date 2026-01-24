@@ -23,52 +23,87 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Briefcase
+      - name: Install Briefcase + Pillow (for icon rendering)
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          pip install briefcase
+          pip install briefcase Pillow
 
-      # 3) Print pyproject & soft sanity warning (does not fail the job)
+      # 3) Soft sanity check pyproject + assets (WARN only; build continues)
       - name: Print pyproject & soft-check expected fields
         run: |
           set -euo pipefail
           PY="pyproject.toml"
-          echo "----- pyproject.toml (first 120 lines) -----"
-          sed -n '1,120p' "$PY" || true
+          echo "----- pyproject.toml (first 160 lines) -----"
+          sed -n '1,160p' "$PY" || true
+
           echo "----- soft sanity check (WARN only) -----"
           WARN=0
           grep -E '^\[tool\.briefcase\.app\.eoghan_rua_team_selector\]' "$PY" >/dev/null || { echo "::warning::Missing [tool.briefcase.app.eoghan_rua_team_selector] section"; WARN=1; }
           grep -E '^[[:space:]]*module[[:space:]]*='   "$PY" | grep -F 'eoghan_rua_team_selector.app' >/dev/null || { echo "::warning::Missing/invalid module=eoghan_rua_team_selector.app"; WARN=1; }
           grep -E '^[[:space:]]*requires[[:space:]]*=' "$PY" >/dev/null || { echo "::warning::Missing requires=[...] list"; WARN=1; }
-          grep -E -i 'std-nslog' "$PY" >/dev/null || { echo "::warning::std-nslog not present in requires (Python stdout/stderr won't hit syslog)"; WARN=1; }
+          grep -Ei 'std-nslog' "$PY" >/dev/null || { echo "::warning::std-nslog not present in requires (Python stdout/stderr won't hit syslog)"; WARN=1; }
           grep -E '^[[:space:]]*icon[[:space:]]*='    "$PY" >/dev/null || { echo "::warning::Missing icon=... (set to assets/icon.png)"; WARN=1; }
           grep -E '^[[:space:]]*splash[[:space:]]*='  "$PY" >/dev/null || { echo "::warning::Missing splash=... (set to assets/splash.png)"; WARN=1; }
           grep -E '^[[:space:]]*resources[[:space:]]*=' "$PY" >/dev/null || { echo "::warning::Missing resources=[...] (should include assets/crest.png)"; WARN=1; }
           for f in assets/icon.png assets/splash.png assets/crest.png; do
-            test -f "$f" || { echo "::warning::Missing file: $f"; WARN=1; }
+            if [ ! -f "$f" ]; then
+              echo "::warning::Missing file: $f"
+              WARN=1
+            fi
           done
+
           if [ "$WARN" -eq 1 ]; then
-            echo "::notice::Sanity check warnings detected above. Build will continue; ensure you commit pyproject/assets fixes."
+            echo "::notice::Sanity warnings printed above. Build will continue; commit pyproject/assets fixes when you can."
           else
             echo "pyproject + assets look OK"
           fi
 
-      # 4) Create project (idempotent) & UPDATE metadata+requirements so icon/splash/deps/resources refresh
-      - name: Create iOS project & update metadata/requirements
+      # 4) Ensure base icon exists; if not, use crest.png. Then render all iOS icon variants.
+      - name: Generate iOS AppIcon variants from base image
         run: |
           set -euo pipefail
-          briefcase create iOS || true
-          # -d refreshes Info.plist, icons, splash, etc.; -r refreshes Python deps (incl. std-nslog)
-          briefcase update iOS -d -r
+          mkdir -p assets
+          if [ ! -f assets/icon.png ]; then
+            if [ -f assets/crest.png ]; then
+              cp assets/crest.png assets/icon.png
+              echo "No assets/icon.png found; copied assets/crest.png -> assets/icon.png"
+            else
+              echo "::warning::No assets/icon.png or assets/crest.png found; icon variants won't be rendered."
+            fi
+          fi
 
-      # 5) Build iOS App
+          python - <<'PY'
+          import os
+          from PIL import Image
+          base = "assets/icon.png"
+          sizes = [20,29,40,58,60,76,80,87,120,152,167,180,640,1024,1280,1920]
+          if os.path.exists(base):
+              img = Image.open(base).convert("RGBA")
+              for s in sizes:
+                  out = f"assets/icon.png-{s}.png"
+                  img.resize((s,s), Image.LANCZOS).save(out)
+                  print("Wrote", out)
+          else:
+              print("Base icon not found; skipping variant rendering")
+          PY
+
+      # 5) Create project (idempotent) & UPDATE metadata/resources/requirements
+      - name: Create iOS project & update metadata/resources/requirements
+        run: |
+          set -euo pipefail
+          # For your Briefcase version, the target is "iOS Xcode"
+          briefcase create "iOS Xcode" || true
+          # Refresh Python deps (-r) and resources (icons/splash/assets)
+          briefcase update "iOS Xcode" -r --update-resources
+
+      # 6) Build iOS App
       - name: Build iOS App
         run: |
           set -euo pipefail
-          briefcase build iOS
+          briefcase build "iOS Xcode"
 
-      # 6) Locate Xcode dir produced by Briefcase (build/<app>/ios/xcode)
+      # 7) Locate Xcode dir produced by Briefcase
       - name: Locate Xcode directory
         id: xcode
         run: |
@@ -78,10 +113,10 @@ jobs:
             echo "ERROR: Xcode directory not found under build/"
             exit 1
           fi
-          echo "Found Xcode dir: $APP_DIR"
           echo "APP_DIR=$APP_DIR" >> $GITHUB_OUTPUT
+          echo "Found Xcode dir: $APP_DIR"
 
-      # 7) Inspect AppIcon asset (prove bee icon replaced)
+      # 8) Inspect AppIcon asset (prove bee icon replaced)
       - name: Inspect AppIcon asset catalog (pre-archive)
         run: |
           set -euo pipefail
@@ -95,7 +130,7 @@ jobs:
             echo "::warning::AppIcon.appiconset not found; Briefcase may still be using default icon."
           fi
 
-      # 8) Determine scheme from the .app name
+      # 9) Determine scheme from the .app name
       - name: Determine scheme
         id: scheme
         run: |
@@ -106,10 +141,10 @@ jobs:
             exit 1
           fi
           SCHEME=$(basename "$APP_PATH" .app)
-          echo "Using scheme: $SCHEME"
           echo "SCHEME=$SCHEME" >> $GITHUB_OUTPUT
+          echo "Using scheme: $SCHEME"
 
-      # 9) Signing assets (legacy PKCS#12 import + profile UUID)
+      # 10) Signing assets (legacy PKCS#12 import + profile UUID)
       - name: Set up signing
         id: signing
         env:
@@ -161,14 +196,13 @@ jobs:
           PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PROFILE_PLIST")
           PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PROFILE_PLIST")
           TEAM_ID=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PROFILE_PLIST")
-          echo "Using profile: $PROFILE_NAME ($PROFILE_UUID) Team: $TEAM_ID"
-
           echo "PROFILE_NAME=$PROFILE_NAME" >> $GITHUB_OUTPUT
           echo "PROFILE_UUID=$PROFILE_UUID" >> $GITHUB_OUTPUT
           echo "TEAM_ID=$TEAM_ID" >> $GITHUB_OUTPUT
           echo "KEYCHAIN=$KEYCHAIN" >> $GITHUB_OUTPUT
+          echo "Using profile: $PROFILE_NAME ($PROFILE_UUID) Team: $TEAM_ID"
 
-      # 10) Archive with Distribution identity + profile
+      # 11) Archive with Distribution identity + profile
       - name: Archive iOS app
         run: |
           set -euo pipefail
@@ -187,7 +221,7 @@ jobs:
             -archivePath EoghanRua.xcarchive \
             archive
 
-      # 11) Re-sign nested code → embed profile → re-sign app LAST
+      # 12) Re-sign nested code → embed profile → re-sign app LAST
       - name: Finalize signing order (frameworks → embed profile → app)
         run: |
           set -euo pipefail
@@ -216,7 +250,7 @@ jobs:
           cp "$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision" "$APP/embedded.mobileprovision"
           codesign --force --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" --entitlements "$ENT_APP" "$APP"
 
-      # 12) Verify signatures and crest presence (archive)
+      # 13) Verify signatures and crest presence (archive)
       - name: Verify code signatures (archive) & crest resource
         run: |
           set -euo pipefail
@@ -228,7 +262,7 @@ jobs:
             echo "::warning::crest.png not found under resources/ (check pyproject resources= and code path)"
           fi
 
-      # 13) Manual IPA packaging (avoid exportArchive re-touching)
+      # 14) Manual IPA packaging (avoid exportArchive re-touching)
       - name: Package IPA manually
         id: manualipa
         run: |
@@ -241,7 +275,7 @@ jobs:
           echo "IPA_PATH=$OUT/EoghanRua-AdHoc-Manual.ipa" >> $GITHUB_OUTPUT
           ls -lh "$OUT"
 
-      # 14) Verify deep signature inside the IPA (final safety)
+      # 15) Verify deep signature inside the IPA (final safety)
       - name: Verify IPA content signatures
         run: |
           set -euo pipefail
@@ -257,7 +291,7 @@ jobs:
             echo "::warning::crest.png missing inside IPA resources/"
           fi
 
-      # 15) Upload IPA
+      # 16) Upload IPA
       - name: Upload IPA (Manual)
         uses: actions/upload-artifact@v4
         with:
