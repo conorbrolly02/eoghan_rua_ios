@@ -160,7 +160,24 @@ jobs:
             -archivePath EoghanRua.xcarchive \
             archive
 
-      # 8) Create ExportOptions.plist via PlistBuddy (no XML heredoc)
+      # 8) Verify deep code signatures before export (fails fast on issues)
+      - name: Verify code signatures (pre-export)
+        run: |
+          set -euo pipefail
+          APP="${{ steps.xcode.outputs.APP_DIR }}/EoghanRua.xcarchive/Products/Applications/${{ steps.scheme.outputs.SCHEME }}.app"
+
+          echo "Verifying deep code signatures…"
+          codesign -vvv --deep --strict "$APP"
+
+          echo "App entitlements:"
+          codesign -d --entitlements :- "$APP" 2>/dev/null || true
+
+          if [ -d "$APP/Frameworks/Python.framework" ]; then
+            echo "Python.framework entitlements:"
+            codesign -d --entitlements :- "$APP/Frameworks/Python.framework/Python" 2>/dev/null || true
+          fi
+
+      # 9) Create ExportOptions.plist via PlistBuddy (no XML heredoc)
       - name: Create ExportOptions.plist
         id: exportopts
         run: |
@@ -175,7 +192,7 @@ jobs:
           echo "Created ExportOptions at $(pwd)/$PLIST"
           /usr/libexec/PlistBuddy -c "Print" "$PLIST"
 
-      # 9) Export the signed IPA
+      # 10) Export the signed IPA
       - name: Export signed IPA
         run: |
           set -euo pipefail
@@ -186,7 +203,7 @@ jobs:
             -exportOptionsPlist "${{ steps.exportopts.outputs.PLIST_PATH }}"
           ls -lh export || true
 
-      # 10) Upload the IPA
+      # 11) Upload the IPA
       - name: Upload signed IPA
         uses: actions/upload-artifact@v4
         with:
