@@ -24,15 +24,20 @@ jobs:
 
       - name: Install Briefcase
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
           pip install briefcase
 
       # 3) Create & build with Briefcase
       - name: Create iOS Project
-        run: briefcase create iOS
+        run: |
+          set -euo pipefail
+          briefcase create iOS
 
       - name: Build iOS App
-        run: briefcase build iOS
+        run: |
+          set -euo pipefail
+          briefcase build iOS
 
       # 4) Locate Xcode dir produced by Briefcase (build/<app>/ios/xcode)
       - name: Locate Xcode directory
@@ -61,7 +66,7 @@ jobs:
           echo "Using scheme: $SCHEME"
           echo "SCHEME=$SCHEME" >> $GITHUB_OUTPUT
 
-      # 6) Install signing assets (sanity checks + legacy PKCS#12; extract profile UUID)
+      # 6) Signing assets (sanity checks + legacy PKCS#12 re-export + profile UUID)
       - name: Set up signing
         id: signing
         env:
@@ -79,20 +84,30 @@ jobs:
           security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
           security list-keychains -d user -s "$KEYCHAIN"
 
-          # Decode & sanity check certificate
+          # ---- Decode original PKCS#12 and sanity-check with OpenSSL ----
           echo "$IOS_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          echo "Verifying original PKCS#12…"
           ls -lh "$RUNNER_TEMP/cert.p12"
           wc -c  "$RUNNER_TEMP/cert.p12"
-          openssl pkcs12 -in "$RUNNER_TEMP/cert.p12" -passin pass:"$IOS_CERT_PASSWORD" -info -nokeys >/dev/null
+          openssl pkcs12 -in "$RUNNER_TEMP/cert.p12" \
+            -passin pass:"$IOS_CERT_PASSWORD" \
+            -info -nokeys >/dev/null
 
-          # Re-export as legacy PKCS#12 for macOS Keychain
-          openssl pkcs12 -in "$RUNNER_TEMP/cert.p12" -passin pass:"$IOS_CERT_PASSWORD" -nodes -out "$RUNNER_TEMP/cert_and_key.pem"
-          if openssl pkcs12 -export -legacy -in "$RUNNER_TEMP/cert_and_key.pem" -out "$RUNNER_TEMP/cert_legacy.p12" -name "Apple Distribution" -passout pass:"$IOS_CERT_PASSWORD" 2>/dev/null; then
+          # ---- Convert to PEM (cert + key), then re-export as legacy PKCS#12 ----
+          openssl pkcs12 -in "$RUNNER_TEMP/cert.p12" \
+            -passin pass:"$IOS_CERT_PASSWORD" \
+            -nodes -out "$RUNNER_TEMP/cert_and_key.pem"
+
+          if openssl pkcs12 -export -legacy \
+               -in  "$RUNNER_TEMP/cert_and_key.pem" \
+               -out "$RUNNER_TEMP/cert_legacy.p12" \
+               -name "Apple Distribution" \
+               -passout pass:"$IOS_CERT_PASSWORD" 2>/dev/null; then
             echo "Re-exported PKCS#12 using -legacy."
           else
             echo "OpenSSL lacks -legacy; using explicit legacy algorithms…"
             openssl pkcs12 -export \
-              -in "$RUNNER_TEMP/cert_and_key.pem" \
+              -in  "$RUNNER_TEMP/cert_and_key.pem" \
               -out "$RUNNER_TEMP/cert_legacy.p12" \
               -name "Apple Distribution" \
               -passout pass:"$IOS_CERT_PASSWORD" \
@@ -101,14 +116,20 @@ jobs:
           fi
 
           echo "Importing legacy PKCS#12 into keychain…"
-          security import "$RUNNER_TEMP/cert_legacy.p12" -k "$KEYCHAIN" -P "$IOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security import "$RUNNER_TEMP/cert_legacy.p12" \
+            -k "$KEYCHAIN" \
+            -P "$IOS_CERT_PASSWORD" \
+            -T /usr/bin/codesign
 
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN"
+          # Allow codesign access
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PWD" "$KEYCHAIN"
 
-          # Optional: list identities
+          # Optional: list codesign identities (debug)
           security find-identity -v -p codesigning "$KEYCHAIN" || true
 
-          # Provisioning profile
+          # ---- Provisioning profile ----
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           PROFILE_PATH="$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision"
           echo "$IOS_PROVISION_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
@@ -158,21 +179,21 @@ jobs:
           fi
           echo "Using identity: $IDENTITY_HASH"
 
-          # Extract current app entitlements
+          # Extract current app entitlements (used only for app final sign)
           ENT_APP="$RUNNER_TEMP/app_ents.plist"
           codesign -d --entitlements :- "$APP" > "$ENT_APP" 2>/dev/null || true
 
-          echo "Re-signing Frameworks (no entitlements)…"
+          echo "Re-signing Frameworks (*.framework) WITHOUT entitlements…"
           find "$APP/Frameworks" -maxdepth 1 -type d -name "*.framework" 2>/dev/null | while read -r FW; do
             echo "  sign $FW"
-            codesign --force --options runtime --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" "$FW"
+            codesign --force --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" "$FW"
           done
 
-          echo "Re-signing Mach-O files (*.dylib, *.so, executables) (no entitlements)…"
+          echo "Re-signing Mach-O files (*.dylib, *.so, executables) WITHOUT entitlements…"
           while IFS= read -r F; do
             if file "$F" | grep -q "Mach-O"; then
               echo "  sign $F"
-              codesign --force --options runtime --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" "$F"
+              codesign --force --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" "$F"
             fi
           done < <(find "$APP" -type f \( -name "*.dylib" -o -name "*.so" -o -perm -111 \) 2>/dev/null)
 
@@ -180,18 +201,27 @@ jobs:
           cp "$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision" "$APP/embedded.mobileprovision"
 
           echo "Re-signing APP bundle LAST with entitlements…"
-          codesign --force --options runtime --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" --entitlements "$ENT_APP" "$APP"
+          codesign --force --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" --entitlements "$ENT_APP" "$APP"
 
-      # 9) Verify deep signature in the archive (should be clean)
-        # fails fast if anything is off
-      - name: Verify code signatures (archive)
+      # 9) Verify deep signature in the archive (should be clean) + assert crest resource
+      - name: Verify code signatures (archive) & crest resource
         run: |
           set -euo pipefail
           APP="${{ steps.xcode.outputs.APP_DIR }}/EoghanRua.xcarchive/Products/Applications/${{ steps.scheme.outputs.SCHEME }}.app"
           echo "Verifying deep signatures in archive…"
           codesign -vvv --deep --strict "$APP"
-          echo "App entitlements:"
+
+          echo "App entitlements (for info):"
           codesign -d --entitlements :- "$APP" 2>/dev/null || true
+
+          echo "Checking resources/crest.png presence…"
+          if [ -f "$APP/resources/crest.png" ]; then
+            echo "OK: crest.png found at $APP/resources/crest.png"
+          else
+            echo "WARNING: crest.png not found under $APP/resources/"
+            # Not failing build; just warn. If you want it to fail, uncomment next line:
+            # exit 1
+          fi
 
       # 10) Manual IPA packaging (avoid re-signing by xcodebuild -exportArchive)
       - name: Package IPA manually
@@ -219,6 +249,11 @@ jobs:
           codesign -vvv --deep --strict "$APP" || (echo "Deep verify FAILED inside IPA" && exit 1)
           echo "Entitlements (IPA content):"
           codesign -d --entitlements :- "$APP" 2>/dev/null || true
+          if [ -f "$APP/resources/crest.png" ]; then
+            echo "OK: crest.png present inside IPA"
+          else
+            echo "WARNING: crest.png missing inside IPA resources/"
+          fi
 
       # 12) Upload IPA
       - name: Upload IPA (Manual)
