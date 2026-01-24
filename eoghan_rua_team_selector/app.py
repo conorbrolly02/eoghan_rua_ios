@@ -1,17 +1,21 @@
 
-# app.py
+# app.py  — with Option B diagnostics at the very top
+# -----------------------------------------------
+# 1) Enable verbose import tracing & fatal tracebacks *before* other imports
 import sys
 import os
-import traceback
+import faulthandler
+faulthandler.enable()                 # dump Python tracebacks on fatal errors
+os.environ["PYTHONVERBOSE"] = "1"     # make Python print verbose import logs to NSLog (via std-nslog)
 
-import toga
-from rubicon.objc import NSLog  # Write to iOS system log (visible via idevicesyslog)
-
-# ---------------------------------------------------------------------
-# iOS bundle is read-only; prevent .pyc writes and any bytecode attempts
-# ---------------------------------------------------------------------
+# 2) Prevent .pyc writes into iOS read-only bundle
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
+# 3) Regular imports (after diagnostics are active)
+import traceback
+import toga
+from rubicon.objc import NSLog
 
 
 class EoghanRuaApp(toga.App):
