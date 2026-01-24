@@ -34,7 +34,7 @@ jobs:
       - name: Build iOS App
         run: briefcase build iOS
 
-      # 4) Locate Xcode dir produced by Briefcase
+      # 4) Locate Xcode dir produced by Briefcase (build/<app>/ios/xcode)
       - name: Locate Xcode directory
         id: xcode
         run: |
@@ -61,7 +61,7 @@ jobs:
           echo "Using scheme: $SCHEME"
           echo "SCHEME=$SCHEME" >> $GITHUB_OUTPUT
 
-      # 6) Signing assets (sanity checks + legacy PKCS#12 re-export + profile UUID)
+      # 6) Install signing assets (sanity checks + legacy PKCS#12; extract profile UUID)
       - name: Set up signing
         id: signing
         env:
@@ -79,30 +79,20 @@ jobs:
           security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
           security list-keychains -d user -s "$KEYCHAIN"
 
-          # ---- Decode original PKCS#12 and sanity-check with OpenSSL ----
+          # Decode & sanity check certificate
           echo "$IOS_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          echo "Verifying original PKCS#12…"
           ls -lh "$RUNNER_TEMP/cert.p12"
           wc -c  "$RUNNER_TEMP/cert.p12"
-          openssl pkcs12 -in "$RUNNER_TEMP/cert.p12" \
-            -passin pass:"$IOS_CERT_PASSWORD" \
-            -info -nokeys >/dev/null
+          openssl pkcs12 -in "$RUNNER_TEMP/cert.p12" -passin pass:"$IOS_CERT_PASSWORD" -info -nokeys >/dev/null
 
-          # ---- Convert to PEM (cert + key), then re-export as legacy PKCS#12 ----
-          openssl pkcs12 -in "$RUNNER_TEMP/cert.p12" \
-            -passin pass:"$IOS_CERT_PASSWORD" \
-            -nodes -out "$RUNNER_TEMP/cert_and_key.pem"
-
-          if openssl pkcs12 -export -legacy \
-               -in  "$RUNNER_TEMP/cert_and_key.pem" \
-               -out "$RUNNER_TEMP/cert_legacy.p12" \
-               -name "Apple Distribution" \
-               -passout pass:"$IOS_CERT_PASSWORD" 2>/dev/null; then
+          # Re-export as legacy PKCS#12 for macOS Keychain
+          openssl pkcs12 -in "$RUNNER_TEMP/cert.p12" -passin pass:"$IOS_CERT_PASSWORD" -nodes -out "$RUNNER_TEMP/cert_and_key.pem"
+          if openssl pkcs12 -export -legacy -in "$RUNNER_TEMP/cert_and_key.pem" -out "$RUNNER_TEMP/cert_legacy.p12" -name "Apple Distribution" -passout pass:"$IOS_CERT_PASSWORD" 2>/dev/null; then
             echo "Re-exported PKCS#12 using -legacy."
           else
             echo "OpenSSL lacks -legacy; using explicit legacy algorithms…"
             openssl pkcs12 -export \
-              -in  "$RUNNER_TEMP/cert_and_key.pem" \
+              -in "$RUNNER_TEMP/cert_and_key.pem" \
               -out "$RUNNER_TEMP/cert_legacy.p12" \
               -name "Apple Distribution" \
               -passout pass:"$IOS_CERT_PASSWORD" \
@@ -111,20 +101,14 @@ jobs:
           fi
 
           echo "Importing legacy PKCS#12 into keychain…"
-          security import "$RUNNER_TEMP/cert_legacy.p12" \
-            -k "$KEYCHAIN" \
-            -P "$IOS_CERT_PASSWORD" \
-            -T /usr/bin/codesign
+          security import "$RUNNER_TEMP/cert_legacy.p12" -k "$KEYCHAIN" -P "$IOS_CERT_PASSWORD" -T /usr/bin/codesign
 
-          # Allow codesign access
-          security set-key-partition-list \
-            -S apple-tool:,apple:,codesign: \
-            -s -k "$KEYCHAIN_PWD" "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN"
 
-          # Optional: list codesign identities (debug)
+          # Optional: list identities
           security find-identity -v -p codesigning "$KEYCHAIN" || true
 
-          # ---- Provisioning profile ----
+          # Provisioning profile
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           PROFILE_PATH="$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision"
           echo "$IOS_PROVISION_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
@@ -141,7 +125,7 @@ jobs:
           echo "TEAM_ID=$TEAM_ID" >> $GITHUB_OUTPUT
           echo "KEYCHAIN=$KEYCHAIN" >> $GITHUB_OUTPUT
 
-      # 7) Archive with explicit Distribution identity + profile (name + UUID)
+      # 7) Archive (manual signing parameters)
       - name: Archive iOS app
         run: |
           set -euo pipefail
@@ -160,88 +144,85 @@ jobs:
             -archivePath EoghanRua.xcarchive \
             archive
 
-      # 8) Re-sign nested code, embed profile, then re-sign the app (ORDER MATTERS)
-      - name: Resign bundle correctly (frameworks → embed profile → app)
+      # 8) Re-sign nested code (no entitlements) -> embed profile -> re-sign app LAST (with app entitlements)
+      - name: Finalize signing order (frameworks → embed profile → app)
         run: |
           set -euo pipefail
           APP="${{ steps.xcode.outputs.APP_DIR }}/EoghanRua.xcarchive/Products/Applications/${{ steps.scheme.outputs.SCHEME }}.app"
           KEYCHAIN="${{ steps.signing.outputs.KEYCHAIN }}"
 
-          # Get Distribution identity hash
           IDENTITY_HASH=$(security find-identity -v -p codesigning "$KEYCHAIN" | awk '/Apple Distribution/ {print $2; exit}')
           if [ -z "$IDENTITY_HASH" ]; then
-            echo "ERROR: Apple Distribution identity not found in temp keychain"
+            echo "ERROR: Apple Distribution identity not found"
             exit 1
           fi
           echo "Using identity: $IDENTITY_HASH"
 
-          # Extract the app's entitlements (we'll use them ONLY for the app sign)
+          # Extract current app entitlements
           ENT_APP="$RUNNER_TEMP/app_ents.plist"
           codesign -d --entitlements :- "$APP" > "$ENT_APP" 2>/dev/null || true
 
-          echo "Re-signing Frameworks (*.framework) WITHOUT entitlements…"
+          echo "Re-signing Frameworks (no entitlements)…"
           find "$APP/Frameworks" -maxdepth 1 -type d -name "*.framework" 2>/dev/null | while read -r FW; do
-            echo "  codesign $FW"
-            codesign --force --options runtime \
-              --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" "$FW"
+            echo "  sign $FW"
+            codesign --force --options runtime --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" "$FW"
           done
 
-          echo "Re-signing other Mach-O files (*.dylib, *.so, executables) WITHOUT entitlements…"
+          echo "Re-signing Mach-O files (*.dylib, *.so, executables) (no entitlements)…"
           while IFS= read -r F; do
             if file "$F" | grep -q "Mach-O"; then
-              echo "  codesign $F"
-              codesign --force --options runtime \
-                --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" "$F"
+              echo "  sign $F"
+              codesign --force --options runtime --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" "$F"
             fi
           done < <(find "$APP" -type f \( -name "*.dylib" -o -name "*.so" -o -perm -111 \) 2>/dev/null)
 
-          echo "Embedding provisioning profile (must be present before app sign)…"
+          echo "Embedding provisioning profile before app sign…"
           cp "$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision" "$APP/embedded.mobileprovision"
 
-          echo "Re-signing the APP BUNDLE LAST with app entitlements…"
-          codesign --force --options runtime \
-            --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" \
-            --entitlements "$ENT_APP" "$APP"
+          echo "Re-signing APP bundle LAST with entitlements…"
+          codesign --force --options runtime --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" --entitlements "$ENT_APP" "$APP"
 
-      # 9) Verify deep code signatures (should be clean now)
-      - name: Verify code signatures (pre-export)
+      # 9) Verify deep signature in the archive (should be clean)
+        # fails fast if anything is off
+      - name: Verify code signatures (archive)
         run: |
           set -euo pipefail
           APP="${{ steps.xcode.outputs.APP_DIR }}/EoghanRua.xcarchive/Products/Applications/${{ steps.scheme.outputs.SCHEME }}.app"
-          echo "Verifying deep code signatures…"
+          echo "Verifying deep signatures in archive…"
           codesign -vvv --deep --strict "$APP"
           echo "App entitlements:"
           codesign -d --entitlements :- "$APP" 2>/dev/null || true
 
-      # 10) Create ExportOptions.plist via PlistBuddy
-      - name: Create ExportOptions.plist
-        id: exportopts
+      # 10) Manual IPA packaging (avoid re-signing by xcodebuild -exportArchive)
+      - name: Package IPA manually
+        id: manualipa
         run: |
           set -euo pipefail
-          PLIST="ExportOptions.plist"
-          /usr/libexec/PlistBuddy -c "Add :method string ad-hoc" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :signingStyle string manual" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :teamID string ${{ steps.signing.outputs.TEAM_ID }}" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:${{ env.BUNDLE_ID }} string ${{ steps.signing.outputs.PROFILE_NAME }}" "$PLIST"
-          echo "PLIST_PATH=$(pwd)/$PLIST" >> $GITHUB_OUTPUT
-          echo "Created ExportOptions at $(pwd)/$PLIST"
-          /usr/libexec/PlistBuddy -c "Print" "$PLIST"
+          APP_ROOT="${{ steps.xcode.outputs.APP_DIR }}/EoghanRua.xcarchive/Products/Applications"
+          OUT="${{ steps.xcode.outputs.APP_DIR }}/manual_export"
+          mkdir -p "$OUT/Payload"
+          cp -R "$APP_ROOT/${{ steps.scheme.outputs.SCHEME }}.app" "$OUT/Payload/"
+          (cd "$OUT" && zip -qry "EoghanRua-AdHoc-Manual.ipa" Payload)
+          echo "IPA_PATH=$OUT/EoghanRua-AdHoc-Manual.ipa" >> $GITHUB_OUTPUT
+          ls -lh "$OUT"
 
-      # 11) Export the signed IPA
-      - name: Export signed IPA
+      # 11) Verify deep signature inside the IPA (final safety)
+      - name: Verify IPA content signatures
         run: |
           set -euo pipefail
-          cd "${{ steps.xcode.outputs.APP_DIR }}"
-          xcodebuild -exportArchive \
-            -archivePath EoghanRua.xcarchive \
-            -exportPath export \
-            -exportOptionsPlist "${{ steps.exportopts.outputs.PLIST_PATH }}"
-          ls -lh export || true
+          TMPDIR=$(mktemp -d)
+          cp "${{ steps.manualipa.outputs.IPA_PATH }}" "$TMPDIR/app.ipa"
+          cd "$TMPDIR"
+          unzip -q app.ipa
+          APP="Payload/${{ steps.scheme.outputs.SCHEME }}.app"
+          echo "Verifying deep signatures in IPA…"
+          codesign -vvv --deep --strict "$APP" || (echo "Deep verify FAILED inside IPA" && exit 1)
+          echo "Entitlements (IPA content):"
+          codesign -d --entitlements :- "$APP" 2>/dev/null || true
 
-      # 12) Upload the IPA
-      - name: Upload signed IPA
+      # 12) Upload IPA
+      - name: Upload IPA (Manual)
         uses: actions/upload-artifact@v4
         with:
-          name: EoghanRua-AdHoc-IPA
-          path: ${{ steps.xcode.outputs.APP_DIR }}/export/*.ipa
+          name: EoghanRua-AdHoc-IPA-Manual
+          path: ${{ steps.manualipa.outputs.IPA_PATH }}
