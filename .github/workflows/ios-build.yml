@@ -160,24 +160,58 @@ jobs:
             -archivePath EoghanRua.xcarchive \
             archive
 
-      # 8) Verify deep code signatures before export (fails fast on issues)
+      # 8) Re-sign all nested Mach-O code consistently with Distribution identity
+      - name: Resign nested code inside archived .app
+        run: |
+          set -euo pipefail
+          APP="${{ steps.xcode.outputs.APP_DIR }}/EoghanRua.xcarchive/Products/Applications/${{ steps.scheme.outputs.SCHEME }}.app"
+          KEYCHAIN="${{ steps.signing.outputs.KEYCHAIN }}"
+
+          # Extract the Distribution identity hash from the temp keychain
+          IDENTITY_HASH=$(security find-identity -v -p codesigning "$KEYCHAIN" | awk '/Apple Distribution/ {print $2; exit}')
+          if [ -z "$IDENTITY_HASH" ]; then
+            echo "ERROR: Apple Distribution identity not found in temp keychain"
+            exit 1
+          fi
+          echo "Using identity: $IDENTITY_HASH"
+
+          # Derive app entitlements and use them to sign nested binaries
+          ENT_PLIST="$RUNNER_TEMP/app_ents.plist"
+          codesign -d --entitlements :- "$APP" > "$ENT_PLIST" 2>/dev/null || true
+
+          echo "Re-signing Frameworks/*.framework binaries…"
+          find "$APP/Frameworks" -type d -name "*.framework" 2>/dev/null | while read -r FW; do
+            EXE=$(defaults read "$FW/Info" CFBundleExecutable 2>/dev/null || basename "$FW" .framework)
+            BIN="$FW/$EXE"
+            if [ -f "$BIN" ]; then
+              echo "  codesign $BIN"
+              codesign --force --options runtime --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" --entitlements "$ENT_PLIST" "$BIN"
+            fi
+          done
+
+          echo "Re-signing other Mach-O files (*.dylib, *.so, executables)…"
+          while IFS= read -r F; do
+            if file "$F" | grep -q "Mach-O"; then
+              echo "  codesign $F"
+              codesign --force --options runtime --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" --entitlements "$ENT_PLIST" "$F"
+            fi
+          done < <(find "$APP" -type f \( -name "*.dylib" -o -name "*.so" -o -perm -111 \) 2>/dev/null)
+
+      # 9) Verify deep code signatures before export (fails fast on issues)
       - name: Verify code signatures (pre-export)
         run: |
           set -euo pipefail
           APP="${{ steps.xcode.outputs.APP_DIR }}/EoghanRua.xcarchive/Products/Applications/${{ steps.scheme.outputs.SCHEME }}.app"
-
           echo "Verifying deep code signatures…"
           codesign -vvv --deep --strict "$APP"
-
           echo "App entitlements:"
           codesign -d --entitlements :- "$APP" 2>/dev/null || true
-
           if [ -d "$APP/Frameworks/Python.framework" ]; then
             echo "Python.framework entitlements:"
             codesign -d --entitlements :- "$APP/Frameworks/Python.framework/Python" 2>/dev/null || true
           fi
 
-      # 9) Create ExportOptions.plist via PlistBuddy (no XML heredoc)
+      # 10) Create ExportOptions.plist via PlistBuddy (no XML heredoc)
       - name: Create ExportOptions.plist
         id: exportopts
         run: |
@@ -192,7 +226,7 @@ jobs:
           echo "Created ExportOptions at $(pwd)/$PLIST"
           /usr/libexec/PlistBuddy -c "Print" "$PLIST"
 
-      # 10) Export the signed IPA
+      # 11) Export the signed IPA
       - name: Export signed IPA
         run: |
           set -euo pipefail
@@ -203,7 +237,7 @@ jobs:
             -exportOptionsPlist "${{ steps.exportopts.outputs.PLIST_PATH }}"
           ls -lh export || true
 
-      # 11) Upload the IPA
+      # 12) Upload the IPA
       - name: Upload signed IPA
         uses: actions/upload-artifact@v4
         with:
