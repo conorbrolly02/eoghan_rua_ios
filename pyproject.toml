@@ -23,7 +23,10 @@ description = "Offline team selector app for Eoghan Rua GAA."
 app_name = "eoghan_rua_team_selector"
 
 # 👇 Your iOS entry point (contains EoghanRuaApp + main())
-module = "eoghan_rua_team_selector.app"
+
+# ...
+module = "eoghan_rua_team_selector.bootstrap"
+
 
 # 👇 Branding assets in your repo
 icon   = "assets/icon.png"
