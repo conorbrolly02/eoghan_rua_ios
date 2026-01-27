@@ -8,7 +8,7 @@ jobs:
     runs-on: macos-latest
     env:
       # Keep this in sync with app.py app_id
-      BUNDLE_ID: ie.eoghanrua.eoghan_rua_team_selector
+      BUNDLE_ID: ie.eoghanrua.eoghanruateamselector 
       BRIEFCASE_VERBOSE: "1"
 
     steps:
