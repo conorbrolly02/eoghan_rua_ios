@@ -1,10 +1,8 @@
-
-# export_excel.py
+# eoghan_rua_team_selector/export_excel.py
 import io
 from datetime import datetime
 from PIL import Image as PILImage
 import xlsxwriter
-
 
 def _scale_png(png_bytes, max_px=300):
     img = PILImage.open(io.BytesIO(png_bytes)).convert("RGBA")
@@ -17,12 +15,12 @@ def _scale_png(png_bytes, max_px=300):
     out.seek(0)
     return out.read()
 
-
 def build_excel_bytes_with_cover(teams, crest_png):
     bio = io.BytesIO()
     wb = xlsxwriter.Workbook(bio, {'in_memory': True})
-    cover = wb.add_worksheet("Cover")
 
+    # Cover page
+    cover = wb.add_worksheet("Cover")
     title_fmt = wb.add_format({'bold': True, 'font_size': 22})
     body_fmt = wb.add_format({'font_size': 12})
 
@@ -33,8 +31,9 @@ def build_excel_bytes_with_cover(teams, crest_png):
     cover.write("A15", f"Players: {total_players}", body_fmt)
 
     if crest_png:
+        from io import BytesIO
         scaled = _scale_png(crest_png)
-        cover.insert_image("A1", "crest.png", {"image_data": io.BytesIO(scaled)})
+        cover.insert_image("A1", "crest.png", {"image_data": BytesIO(scaled)})
 
     # Summary sheet
     summary = wb.add_worksheet("Summary")
@@ -42,7 +41,6 @@ def build_excel_bytes_with_cover(teams, crest_png):
         "Team", "Player", "Skill (1=strongest)", "Team Score",
         "Team 1s", "Team 2s", "Team 3s"
     ]
-
     summary.write_row(0, 0, headers)
     row = 1
     for t in teams:
