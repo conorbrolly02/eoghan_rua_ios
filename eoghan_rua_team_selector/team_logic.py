@@ -1,12 +1,10 @@
-
-# team_logic.py
+# eoghan_rua_team_selector/team_logic.py
 from typing import List, Tuple, Dict, Optional
 import random
 
 Skill = int
 Player = Tuple[str, Skill]
 WEIGHTS = {1: 3, 2: 2, 3: 1}
-
 
 def _validate(players: List[Player], n_teams: int) -> None:
     if n_teams < 2:
@@ -19,23 +17,19 @@ def _validate(players: List[Player], n_teams: int) -> None:
         if not str(name).strip():
             raise ValueError("Player name cannot be empty.")
 
-
 def _group_by_tier(players: List[Player]) -> Dict[Skill, List[str]]:
     tiers = {1: [], 2: [], 3: []}
     for name, skill in players:
         tiers[skill].append(name)
     return tiers
 
-
 def _snake_order(n: int, forward: bool = True) -> List[int]:
     return list(range(n)) if forward else list(range(n - 1, -1, -1))
-
 
 def _target_team_sizes(total_players: int, n_teams: int) -> List[int]:
     base = total_players // n_teams
     extra = total_players % n_teams
     return [base + (1 if i < extra else 0) for i in range(n_teams)]
-
 
 def pick_teams(players: List[Player], n_teams: int, seed: Optional[int] = None) -> List[Dict]:
     _validate(players, n_teams)
@@ -61,7 +55,6 @@ def pick_teams(players: List[Player], n_teams: int, seed: Optional[int] = None) 
         total = len(names)
         base = total // n_teams
         extra = total % n_teams
-
         order = _snake_order(n_teams, forward=(skill % 2 == 1))
 
         desired = [base] * n_teams
@@ -115,7 +108,6 @@ def pick_teams(players: List[Player], n_teams: int, seed: Optional[int] = None) 
         changed = False
         over = [i for i in range(n_teams) if len(teams[i]["players"]) > target_sizes[i]]
         under = [i for i in range(n_teams) if len(teams[i]["players"]) < target_sizes[i]]
-
         if not over or not under:
             break
 
@@ -124,7 +116,6 @@ def pick_teams(players: List[Player], n_teams: int, seed: Optional[int] = None) 
 
         src = over[0]
         dst = under[0]
-
         mv = pop_lowest(teams[src])
         if mv:
             nm, sk = mv
@@ -135,5 +126,4 @@ def pick_teams(players: List[Player], n_teams: int, seed: Optional[int] = None) 
 
     for t in teams:
         t["players"].sort(key=lambda p: (p[1], p[0].lower()))
-
     return teams
