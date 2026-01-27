@@ -81,7 +81,7 @@ class EoghanRuaApp(toga.App):
 def main():
     """Briefcase calls main(); returning the App is sufficient."""
     return EoghanRuaApp(
-        app_id="ie.eoghanrua.eoghan_rua_team_selector",
+        app_id="ie.eoghanrua.eoghanruateamselector",
         app_name="Eoghan Rua Team Selector",
         formal_name="Eoghan Rua Team Selector",
     )
