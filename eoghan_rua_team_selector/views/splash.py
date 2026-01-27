@@ -1,44 +1,34 @@
-
 # eoghan_rua_team_selector/views/splash.py
 from pathlib import Path
-from rubicon.objc import NSLog
 import toga
 from toga.style import Pack
 from toga.style.pack import COLUMN, CENTER
 
-class Splash(toga.MainWindow):
-    def __init__(self, app):
-        # On iOS, MainWindow is full-screen; size=... is ignored and sometimes confusing.
-        super().__init__(title="Eoghan Rua — Team Selector")
-        self.app = app
+def Splash(app: toga.App):
+    from eoghan_rua_team_selector.app import resource_path
 
-        NSLog("Splash: building view")
+    crest_img_path = resource_path(app, "crest.png")
+    img = toga.Image(crest_img_path) if crest_img_path.exists() else None
+    image_view = toga.ImageView(image=img, style=Pack(height=160)) if img else toga.Label(
+        "crest.png not found in resources", style=Pack(color="red", padding_bottom=8)
+    )
 
-        # --- Locate resources safely on iOS ---
-        # Briefcase copies your declared resources into <app bundle>/resources/
-        resources = Path(app.paths.app) / "resources"
+    title = toga.Label(
+        "Eoghan Rua Team Selector",
+        style=Pack(font_size=20, font_weight="bold", padding_top=8)
+    )
+    subtitle = toga.Label(
+        "Build balanced teams offline.",
+        style=Pack(color="#555", padding_bottom=16)
+    )
+    start_btn = toga.Button(
+        "Start",
+        on_press=lambda w: app.goto_home(),
+        style=Pack(padding_top=8, width=200, alignment=CENTER)
+    )
 
-        # UI layout
-        box = toga.Box(style=Pack(direction=COLUMN, alignment=CENTER, padding=20,
-                                  width=toga.FLEX, height=toga.FLEX))
-
-        crest_path = resources / "crest.png"
-        if crest_path.exists():
-            try:
-                img = toga.Image(crest_path)
-                box.add(toga.ImageView(img, style=Pack(height=180, width=180)))
-            except Exception as exc:
-                NSLog(f"Splash: failed to load crest.png: {exc}")
-
-        box.add(toga.Label("Eoghan Rua — Team Selector", style=Pack(font_size=20, padding_top=10)))
-
-        box.add(
-            toga.Button(
-                "Continue",
-                on_press=lambda w: self.app.goto_home(),
-                style=Pack(padding_top=20, width=200),
-            )
-        )
-
-        self.content = box
-        NSLog("Splash: view ready")
+    box = toga.Box(
+        children=[image_view, title, subtitle, start_btn],
+        style=Pack(direction=COLUMN, alignment=CENTER, padding=20)
+    )
+    return box
