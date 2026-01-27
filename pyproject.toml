@@ -1,5 +1,5 @@
 [project]
-name = "eoghan_rua_team_selector"
+name = "eoghanruateamselector "
 version = "1.0.0"
 description = "Offline team selector app for Eoghan Rua GAA."
 readme = "README.md"
