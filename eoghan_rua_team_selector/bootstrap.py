@@ -1,12 +1,10 @@
-
 # eoghan_rua_team_selector/bootstrap.py
 import os
 import sys
 import faulthandler
 faulthandler.enable()
 
-# Verbose import logs; avoid .pyc in read-only bundle
-os.environ.setdefault("PYTHONVERBOSE", "1")
+# Avoid .pyc writes into the read-only iOS bundle
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 
@@ -20,7 +18,7 @@ def _excepthook(exc_type, exc, tb):
 # Make *any* uncaught exception print to iOS syslog
 sys.excepthook = _excepthook
 
-# Try importing your real app module; if it raises, we'll log the full traceback.
+# Import the real app; if it raises, log the full traceback.
 try:
     from eoghan_rua_team_selector import app as real_app
     NSLog("BOOTSTRAP: real app imported OK")
