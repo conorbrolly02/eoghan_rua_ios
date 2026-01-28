@@ -13,22 +13,18 @@ project_name = "Eoghan Rua Team Selector"
 bundle = "ie.eoghanrua"
 url = "https://eoghanrua.ie"
 
-# IMPORTANT: 'sources' must point at your actual Python package directory on disk.
-# Your repo has: eoghan_rua_team_selector/
+# <-- This must point to your actual package directory on disk
 sources = ["eoghan_rua_team_selector"]
 
-# ----------------------------------------------------------------------
-# App configuration
-# KEEP the section header's slug aligned with your package directory name.
-# This slug does NOT need to equal your bundle ID or app_name.
-# ----------------------------------------------------------------------
+# KEEP the slug equal to the real package name
 [tool.briefcase.app.eoghan_rua_team_selector]
 formal_name = "Eoghan Rua Team Selector"
 description = "Offline team selector app for Eoghan Rua GAA."
 
-# app_name + bundle -> bundle identifier
-# FINAL BUNDLE ID produced = ie.eoghanrua.eoghanruateamselector
+# Bundle ID = bundle + "." + app_name  ->  ie.eoghanrua.eoghanruateamselector
 app_name = "eoghanruateamselector"
+
+# Start through your bootstrap (unchanged)
 module = "eoghan_rua_team_selector.bootstrap"
 
 # Branding assets
