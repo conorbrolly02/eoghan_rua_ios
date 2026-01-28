@@ -7,7 +7,6 @@ jobs:
   build-ios:
     runs-on: macos-latest
     env:
-      # MUST match app.py app_id and pyproject (bundle + "." + app_name)
       BUNDLE_ID: ie.eoghanrua.eoghanruateamselector
       BRIEFCASE_VERBOSE: "1"
 
@@ -35,17 +34,34 @@ jobs:
           python -m pip install --upgrade pip
           pip install briefcase Pillow
 
-      # Print the exact app sections and sources as seen by the runner
-      - name: Print pyproject app sections & sources
+      # Normalize pyproject.toml to avoid smart quotes/CRLF/BOM issues
+      - name: Normalize pyproject.toml formatting
         shell: bash
         run: |
           set -euo pipefail
-          echo "---- [tool.briefcase.app.*] sections ----"
-          grep -n '^\[tool\.briefcase\.app\.' pyproject.toml || true
-          echo "---- sources line(s) ----"
-          grep -n '^[[:space:]]*sources[[:space:]]*=' pyproject.toml || true
+          # Convert CRLF to LF
+          perl -i -pe 's/\r\n/\n/g' pyproject.toml
+          # Replace curly quotes and em/en-dashes with ASCII
+          python - <<'PY'
+          from pathlib import Path
+          s = Path('pyproject.toml').read_text(encoding='utf-8', errors='replace')
+          s = (s.replace('“','"').replace('”','"')
+                 .replace('’',"'").replace('‘',"'")
+                 .replace('–','-').replace('—','-'))
+          Path('pyproject.toml').write_text(s, encoding='utf-8')
+          PY
 
-      # Validate AND auto‑patch if needed so we never hit the same error again
+      # Show what the runner actually sees (lines + bytes)
+      - name: Show pyproject first 40 lines and bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "----- pyproject (first 40 lines) -----"
+          nl -ba pyproject.toml | sed -n '1,40p'
+          echo "----- pyproject (first 256 bytes, hex) -----"
+          xxd -g1 -l 256 pyproject.toml || true
+
+      # Validate & auto-patch slug/sources/app_name (fail fast if wrong)
       - name: Validate & auto‑patch pyproject slug/sources/app_name
         shell: bash
         run: |
@@ -54,23 +70,21 @@ jobs:
           import sys, re, pathlib, tomllib
           p = pathlib.Path("pyproject.toml")
           txt = p.read_text(encoding="utf-8")
-          # Auto‑patch any wrong slug header to the correct one
-          corrected = re.sub(
+          # Auto‑patch a wrong slug header if present
+          patched = re.sub(
               r"\[tool\.briefcase\.app\.eoghanruateamselector\]",
               "[tool.briefcase.app.eoghan_rua_team_selector]",
-              txt,
-              flags=re.IGNORECASE,
+              txt, flags=re.IGNORECASE,
           )
-          if corrected != txt:
+          if patched != txt:
               print("Patched app slug in pyproject.toml -> eoghan_rua_team_selector")
-              p.write_text(corrected, encoding="utf-8")
+              p.write_text(patched, encoding="utf-8")
 
           data = tomllib.loads(p.read_text(encoding="utf-8"))
           apps = data.get("tool", {}).get("briefcase", {}).get("app", {})
           if not apps or len(apps) != 1:
               print(f"::error::Expected exactly 1 [tool.briefcase.app.*] section; found {len(apps)}: {list(apps.keys())}")
               sys.exit(1)
-
           slug = list(apps.keys())[0]
           sources = data.get("tool", {}).get("briefcase", {}).get("sources", [])
           print(f"Slug detected: {slug}")
@@ -81,7 +95,6 @@ jobs:
           if slug != "eoghan_rua_team_selector":
               print(f"::error::app slug must be 'eoghan_rua_team_selector' (was '{slug}')")
               sys.exit(1)
-
           app = apps[slug]
           app_name = app.get("app_name")
           if app_name != "eoghanruateamselector":
@@ -90,49 +103,17 @@ jobs:
           print("Briefcase configuration looks good.")
           PY
 
-      # Optional: package import sanity check (ensures package exists on disk)
+      # Optional: ensure Python can import your package (proves __init__.py is correct)
       - name: Sanity import the package
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import importlib
           import eoghan_rua_team_selector as pkg
           print("OK: imported", pkg.__name__)
           PY
 
-      - name: Generate iOS AppIcon variants from base image
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p assets
-          if [ ! -f assets/icon.png ]; then
-            if [ -f assets/crest.png ]; then
-              cp assets/crest.png assets/icon.png
-              echo "No assets/icon.png found; copied assets/crest.png -> assets/icon.png"
-            else
-              echo "::warning::No assets/icon.png or assets/crest.png found; icon variants won't be rendered."
-            fi
-          fi
-          python - <<'PY'
-          import os
-          from PIL import Image
-          base = "assets/icon.png"
-          sizes = [20,29,40,58,60,76,80,87,120,152,167,180,640,1024,1280,1920]
-          if os.path.exists(base):
-              img = Image.open(base).convert("RGBA")
-              try:
-                  RES = Image.Resampling.LANCZOS
-              except Exception:
-                  RES = Image.LANCZOS
-              for s in sizes:
-                  out = f"assets/icon.png-{s}.png"
-                  img.resize((s, s), RES).save(out)
-                  print("Wrote", out)
-          else:
-              print("Base icon not found; skipping variant rendering")
-          PY
-
+      # Create/update/build with Briefcase
       - name: Create iOS project & update metadata/resources
         shell: bash
         run: |
@@ -165,44 +146,4 @@ jobs:
             briefcase build "iOS Xcode"
           fi
 
-      - name: Locate Xcode directory
-        id: xcode
-        shell: bash
-        run: |
-          set -euo pipefail
-          APP_DIR=$(find build -type d -name "xcode" | head -n 1)
-          if [ -z "$APP_DIR" ]; then
-            echo "ERROR: Xcode directory not found under build/"
-            exit 1
-          fi
-          echo "APP_DIR=$APP_DIR" >> $GITHUB_OUTPUT
-          echo "Found Xcode dir: $APP_DIR"
-
-      - name: Determine scheme
-        id: scheme
-        shell: bash
-        run: |
-          set -euo pipefail
-          APP_PATH=$(find "${{ steps.xcode.outputs.APP_DIR }}" -type d -name "*.app" | head -n 1)
-          if [ -z "$APP_PATH" ]; then
-            echo "ERROR: No .app found to infer scheme"
-            exit 1
-          fi
-          SCHEME=$(basename "$APP_PATH" .app)
-          echo "SCHEME=$SCHEME" >> $GITHUB_OUTPUT
-          echo "Using scheme: $SCHEME"
-
-      # Decode & verify P12 BEFORE import (saves time if password/secret is wrong)
-      - name: Decode & verify PKCS#12
-        env:
-          IOS_CERT_BASE64: ${{ secrets.IOS_CERT_BASE64 }}
-          IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          CERT_P12="$RUNNER_TEMP/cert.p12"
-          echo "$IOS_CERT_BASE64" | base64 --decode > "$CERT_P12"
-          openssl pkcs12 -in "$CERT_P12" -passin pass:"$IOS_CERT_PASSWORD" -info -nokeys -noout
-
-      # (… keep your signing/archive/package steps unchanged below …)
-      # -- snip --
+      # (… keep your signing/archive/package steps as in the last working version …)
