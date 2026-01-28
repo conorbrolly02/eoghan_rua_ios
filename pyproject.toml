@@ -13,19 +13,21 @@ project_name = "Eoghan Rua Team Selector"
 bundle = "ie.eoghanrua"
 url = "https://eoghanrua.ie"
 
-# IMPORTANT: This must point to your actual package directory on disk.
-# Your repo has: eoghan_rua_team_selector/
+# This MUST point to your actual package directory on disk.
+# Your repo has a folder named: eoghan_rua_team_selector
 sources = ["eoghan_rua_team_selector"]
 
 # ----------------------------------------------------------------------
 # App configuration
-# Keep the section slug equal to the real package name (with underscores).
-# Use app_name to control the (hyphen/underscore-free) bundle identifier.
+# Keep the slug equal to the real package name (with underscores).
+# Use app_name to control the Apple bundle identifier.
 # Resulting bundle ID = ie.eoghanrua.eoghanruateamselector
 # ----------------------------------------------------------------------
 [tool.briefcase.app.eoghan_rua_team_selector]
 formal_name = "Eoghan Rua Team Selector"
 description = "Offline team selector app for Eoghan Rua GAA."
+
+# Bundle ID = bundle + "." + app_name
 app_name = "eoghanruateamselector"
 module = "eoghan_rua_team_selector.bootstrap"
 
@@ -42,4 +44,3 @@ requires = [
   "Pillow>=10.0.0",
   "XlsxWriter>=3.1.9",
 ]
-
