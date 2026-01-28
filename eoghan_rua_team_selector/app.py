@@ -25,21 +25,20 @@ class EoghanRuaApp(toga.App):
         """
         Create the main window and show the first screen.
         If anything goes wrong, log the traceback and present a visible error window
-        (this prevents the 'opens then closes' symptom).
+        (prevents 'opens then closes' symptom).
         """
         NSLog("EoghanRuaApp.startup() begin")
         try:
-            # --- Minimal Splash so we can prove launch works ---
+            # Minimal splash so we can prove launch works
             title = toga.Label(
                 "Eoghan Rua Team Selector",
                 style=Pack(font_size=18, font_weight="bold", padding_bottom=8),
             )
             subtitle = toga.Label(
-                "Launch OK – tap to continue",
+                "Launch OK – tap Continue",
                 style=Pack(color="#555", padding_bottom=12),
             )
             go = toga.Button("Continue", on_press=lambda w: self.goto_home())
-
             content = toga.Box(children=[title, subtitle, go], style=Pack(direction=COLUMN, padding=20))
 
             self.main_window = toga.MainWindow(title=self.formal_name)
@@ -56,13 +55,12 @@ class EoghanRuaApp(toga.App):
             )
             self.main_window.show()
 
-    # ---- Navigation helpers you can call from views ----
+    # ---- Navigation helpers ----
     def goto_home(self):
         try:
-            from eoghan_rua_team_selector.views.home import Home  # optional; keep if you have views
+            from eoghan_rua_team_selector.views.home import Home
             content = Home(self)
         except Exception:
-            # fallback if views/home.py not present
             content = toga.Label("Home view placeholder", style=Pack(padding=20))
         self.main_window.content = content
         self.main_window.show()
