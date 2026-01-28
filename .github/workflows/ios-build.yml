@@ -8,7 +8,7 @@ jobs:
     runs-on: macos-latest
     env:
       # Keep this in sync with app.py app_id
-      BUNDLE_ID: ie.eoghanrua.eoghanruateamselector 
+      BUNDLE_ID: ie.eoghanrua.eoghanruateamselector
       BRIEFCASE_VERBOSE: "1"
 
     steps:
@@ -22,6 +22,12 @@ jobs:
         with:
           python-version: '3.11'
 
+      # 3) 🔥 Clean previous build artifacts (IMPORTANT)
+      - name: Clean build artifacts
+        run: |
+          rm -rf build
+          rm -rf dist
+
       - name: Install Briefcase + Pillow (for icon rendering)
         shell: bash
         run: |
@@ -29,7 +35,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install briefcase Pillow
 
-      # 3) Soft sanity check pyproject + assets (WARN only; build continues)
+      # 4) Soft sanity check pyproject + assets (WARN only; build continues)
       - name: Print pyproject & soft-check expected fields
         shell: bash
         run: |
@@ -87,7 +93,7 @@ jobs:
             echo "pyproject + assets look OK"
           fi
 
-      # 4) Ensure base icon exists; if not, use crest.png. Then render iOS icon variants.
+      # 5) Ensure base icon exists; if not, use crest.png. Then render iOS icon variants.
       - name: Generate iOS AppIcon variants from base image
         shell: bash
         run: |
@@ -126,7 +132,7 @@ jobs:
               print("Base icon not found; skipping variant rendering")
           PY
 
-      # 5) Create project & UPDATE metadata/resources (auto-detect Briefcase target)
+      # 6) Create project & UPDATE metadata/resources (auto-detect Briefcase target)
       - name: Create iOS project & update metadata/resources
         shell: bash
         run: |
@@ -154,7 +160,7 @@ jobs:
           fi
           set -e
 
-      # 6) Build iOS App
+      # 7) Build iOS App
       - name: Build iOS App
         shell: bash
         run: |
@@ -165,7 +171,7 @@ jobs:
             briefcase build "iOS Xcode"
           fi
 
-      # 7) Locate Xcode dir produced by Briefcase
+      # 8) Locate Xcode dir produced by Briefcase
       - name: Locate Xcode directory
         id: xcode
         shell: bash
@@ -179,7 +185,7 @@ jobs:
           echo "APP_DIR=$APP_DIR" >> $GITHUB_OUTPUT
           echo "Found Xcode dir: $APP_DIR"
 
-      # 8) Inspect AppIcon asset (pre-archive)
+      # 9) Inspect AppIcon asset (pre-archive)
       - name: Inspect AppIcon asset (pre-archive)
         shell: bash
         run: |
@@ -194,7 +200,7 @@ jobs:
             echo "::warning::AppIcon.appiconset not found; Briefcase may still be using default icon."
           fi
 
-      # 9) Determine scheme from the .app name
+      # 10) Determine scheme from the .app name
       - name: Determine scheme
         id: scheme
         shell: bash
@@ -209,11 +215,23 @@ jobs:
           echo "SCHEME=$SCHEME" >> $GITHUB_OUTPUT
           echo "Using scheme: $SCHEME"
 
-      # 10) Signing assets (import cert + profile)
+      # 11) Decode & verify PKCS#12 (early sanity check)
+      - name: Decode & verify PKCS#12
+        env:
+          IOS_CERT_BASE64: ${{ secrets.IOS_CERT_BASE64 }}
+          IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          CERT_P12="$RUNNER_TEMP/cert.p12"
+          echo "$IOS_CERT_BASE64" | base64 --decode > "$CERT_P12"
+          # Verify the P12 opens with the given password (no keys printed)
+          openssl pkcs12 -in "$CERT_P12" -passin pass:"$IOS_CERT_PASSWORD" -info -nokeys -noout
+
+      # 12) Set up signing (import cert + profile)
       - name: Set up signing
         id: signing
         env:
-          IOS_CERT_BASE64: ${{ secrets.IOS_CERT_BASE64 }}
           IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
           IOS_PROVISION_PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
         shell: bash
@@ -229,27 +247,8 @@ jobs:
           security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
           security list-keychains -d user -s "$KEYCHAIN"
 
-          echo "$IOS_CERT_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          # Convert to legacy-compatible PKCS#12 if necessary
-          openssl pkcs12 -in "$RUNNER_TEMP/cert.p12" -passin pass:"$IOS_CERT_PASSWORD" -nodes -out "$RUNNER_TEMP/cert_and_key.pem"
-          if openssl pkcs12 -export -legacy \
-              -in "$RUNNER_TEMP/cert_and_key.pem" \
-              -out "$RUNNER_TEMP/cert_legacy.p12" \
-              -name "Apple Distribution" \
-              -passout pass:"$IOS_CERT_PASSWORD" 2>/dev/null; then
-            echo "Re-exported PKCS#12 using -legacy."
-          else
-            echo "OpenSSL lacks -legacy; using explicit legacy algorithms…"
-            openssl pkcs12 -export \
-              -in "$RUNNER_TEMP/cert_and_key.pem" \
-              -out "$RUNNER_TEMP/cert_legacy.p12" \
-              -name "Apple Distribution" \
-              -passout pass:"$IOS_CERT_PASSWORD" \
-              -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES \
-              -macalg sha1 -nomaciter
-          fi
-
-          security import "$RUNNER_TEMP/cert_legacy.p12" -k "$KEYCHAIN" -P "$IOS_CERT_PASSWORD" -T /usr/bin/codesign
+          # Import the P12 we already decoded
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$IOS_CERT_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN"
           security find-identity -v -p codesigning "$KEYCHAIN" || true
 
@@ -270,7 +269,7 @@ jobs:
 
           echo "Using profile: $PROFILE_NAME ($PROFILE_UUID) Team: $TEAM_ID"
 
-      # 11) Archive with Distribution identity + profile
+      # 13) Archive with Distribution identity + profile
       - name: Archive iOS app
         shell: bash
         run: |
@@ -290,7 +289,7 @@ jobs:
             -archivePath EoghanRua.xcarchive \
             archive
 
-      # 12) Re-sign nested code → embed profile → re-sign app LAST
+      # 14) Re-sign nested code → embed profile → re-sign app LAST
       - name: Finalize signing order (frameworks → embed profile → app)
         shell: bash
         run: |
@@ -323,7 +322,7 @@ jobs:
           cp "$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision" "$APP/embedded.mobileprovision"
           codesign --force --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" --entitlements "$ENT_APP" "$APP"
 
-      # 13) Verify signatures and crest presence (archive)
+      # 15) Verify signatures and crest presence (archive)
       - name: Verify code signatures (archive) & crest resource
         shell: bash
         run: |
@@ -336,7 +335,7 @@ jobs:
             echo "::warning::crest.png not found under resources/ (check pyproject resources= and code path)"
           fi
 
-      # 14) Manual IPA packaging (avoid exportArchive re-touching)
+      # 16) Manual IPA packaging (avoid exportArchive re-touching)
       - name: Package IPA manually
         id: manualipa
         shell: bash
@@ -350,7 +349,7 @@ jobs:
           echo "IPA_PATH=$OUT/EoghanRua-AdHoc-Manual.ipa" >> $GITHUB_OUTPUT
           ls -lh "$OUT"
 
-      # 15) Verify deep signature inside the IPA (final safety)
+      # 17) Verify deep signature inside the IPA (final safety)
       - name: Verify IPA content signatures
         shell: bash
         run: |
@@ -367,7 +366,7 @@ jobs:
             echo "::warning::crest.png missing inside IPA resources/"
           fi
 
-      # 16) Upload IPA Artifact
+      # 18) Upload IPA Artifact
       - name: Upload IPA (Manual)
         uses: actions/upload-artifact@v4
         with:
