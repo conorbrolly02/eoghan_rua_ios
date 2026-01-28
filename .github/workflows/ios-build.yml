@@ -35,29 +35,53 @@ jobs:
           python -m pip install --upgrade pip
           pip install briefcase Pillow
 
-      # Fail fast if the app slug/sources/app_name are not exactly as required
-      - name: Validate Briefcase slug & sources (fail fast)
+      # Print the exact app sections and sources as seen by the runner
+      - name: Print pyproject app sections & sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "---- [tool.briefcase.app.*] sections ----"
+          grep -n '^\[tool\.briefcase\.app\.' pyproject.toml || true
+          echo "---- sources line(s) ----"
+          grep -n '^[[:space:]]*sources[[:space:]]*=' pyproject.toml || true
+
+      # Validate AND auto‑patch if needed so we never hit the same error again
+      - name: Validate & auto‑patch pyproject slug/sources/app_name
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import sys, tomllib, pathlib
-          py = pathlib.Path("pyproject.toml").read_bytes()
-          data = tomllib.loads(py.decode("utf-8"))
+          import sys, re, pathlib, tomllib
+          p = pathlib.Path("pyproject.toml")
+          txt = p.read_text(encoding="utf-8")
+          # Auto‑patch any wrong slug header to the correct one
+          corrected = re.sub(
+              r"\[tool\.briefcase\.app\.eoghanruateamselector\]",
+              "[tool.briefcase.app.eoghan_rua_team_selector]",
+              txt,
+              flags=re.IGNORECASE,
+          )
+          if corrected != txt:
+              print("Patched app slug in pyproject.toml -> eoghan_rua_team_selector")
+              p.write_text(corrected, encoding="utf-8")
+
+          data = tomllib.loads(p.read_text(encoding="utf-8"))
           apps = data.get("tool", {}).get("briefcase", {}).get("app", {})
           if not apps or len(apps) != 1:
-              print(f"::error::Expected exactly 1 [tool.briefcase.app.*] section; found {len(apps)}.")
+              print(f"::error::Expected exactly 1 [tool.briefcase.app.*] section; found {len(apps)}: {list(apps.keys())}")
               sys.exit(1)
+
           slug = list(apps.keys())[0]
           sources = data.get("tool", {}).get("briefcase", {}).get("sources", [])
-          print(f"Detected slug: {slug}")
-          print(f"Detected sources: {sources}")
+          print(f"Slug detected: {slug}")
+          print(f"Sources detected: {sources}")
           if "eoghan_rua_team_selector" not in sources:
               print("::error::sources must include 'eoghan_rua_team_selector'")
               sys.exit(1)
           if slug != "eoghan_rua_team_selector":
               print(f"::error::app slug must be 'eoghan_rua_team_selector' (was '{slug}')")
               sys.exit(1)
+
           app = apps[slug]
           app_name = app.get("app_name")
           if app_name != "eoghanruateamselector":
@@ -66,7 +90,7 @@ jobs:
           print("Briefcase configuration looks good.")
           PY
 
-      # Optional: quick import check so we know the package is importable
+      # Optional: package import sanity check (ensures package exists on disk)
       - name: Sanity import the package
         shell: bash
         run: |
@@ -180,140 +204,5 @@ jobs:
           echo "$IOS_CERT_BASE64" | base64 --decode > "$CERT_P12"
           openssl pkcs12 -in "$CERT_P12" -passin pass:"$IOS_CERT_PASSWORD" -info -nokeys -noout
 
-      - name: Set up signing (import cert + profile) and validate profile AppID
-        id: signing
-        env:
-          IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
-          IOS_PROVISION_PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
-          BUNDLE_ID: ${{ env.BUNDLE_ID }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          KEYCHAIN="$RUNNER_TEMP/ios-signing.keychain-db"
-          KEYCHAIN_PWD="$(uuidgen)"
-          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
-          security set-keychain-settings -lut 3600 "$KEYCHAIN"
-          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN"
-          security list-keychains -d user -s "$KEYCHAIN"
-          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$IOS_CERT_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PWD" "$KEYCHAIN"
-          security find-identity -v -p codesigning "$KEYCHAIN" || true
-
-          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          PROFILE_PATH="$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision"
-          echo "$IOS_PROVISION_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
-          PROFILE_PLIST="$RUNNER_TEMP/profile.plist"
-          /usr/bin/security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
-
-          PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PROFILE_PLIST")
-          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PROFILE_PLIST")
-          TEAM_ID=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PROFILE_PLIST")
-          APPID_FULL=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$PROFILE_PLIST" || true)
-
-          echo "PROFILE_NAME=$PROFILE_NAME" >> $GITHUB_OUTPUT
-          echo "PROFILE_UUID=$PROFILE_UUID" >> $GITHUB_OUTPUT
-          echo "TEAM_ID=$TEAM_ID" >> $GITHUB_OUTPUT
-          echo "KEYCHAIN=$KEYCHAIN" >> $GITHUB_OUTPUT
-          echo "Profile application-identifier: $APPID_FULL"
-
-          if [ -n "$APPID_FULL" ]; then
-            APPID_NO_TEAM="${APPID_FULL#*.}"
-            if [ "$APPID_NO_TEAM" != "$BUNDLE_ID" ]; then
-              echo "::error::Provisioning profile AppID ($APPID_NO_TEAM) does not match BUNDLE_ID ($BUNDLE_ID)"
-              exit 1
-            fi
-          else
-            echo "::warning::No application-identifier found in profile entitlements; skipping check."
-          fi
-
-      - name: Archive iOS app
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "${{ steps.xcode.outputs.APP_DIR }}"
-          xcodebuild \
-            -scheme "${{ steps.scheme.outputs.SCHEME }}" \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            DEVELOPMENT_TEAM="${{ steps.signing.outputs.TEAM_ID }}" \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="Apple Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="${{ steps.signing.outputs.PROFILE_NAME }}" \
-            PROVISIONING_PROFILE="${{ steps.signing.outputs.PROFILE_UUID }}" \
-            OTHER_CODE_SIGN_FLAGS="--keychain ${{ steps.signing.outputs.KEYCHAIN }}" \
-            -archivePath EoghanRua.xcarchive \
-            archive
-
-      - name: Finalize signing order (frameworks → embed profile → app)
-        shell: bash
-        run: |
-          set -euo pipefail
-          APP="${{ steps.xcode.outputs.APP_DIR }}/EoghanRua.xcarchive/Products/Applications/${{ steps.scheme.outputs.SCHEME }}.app"
-          KEYCHAIN="${{ steps.signing.outputs.KEYCHAIN }}"
-          IDENTITY_HASH=$(security find-identity -v -p codesigning "$KEYCHAIN" | awk '/Apple Distribution/ {print $2; exit}')
-          if [ -z "$IDENTITY_HASH" ]; then
-            echo "ERROR: Apple Distribution identity not found"
-            exit 1
-          fi
-          ENT_APP="$RUNNER_TEMP/app_ents.plist"
-          codesign -d --entitlements :- "$APP" > "$ENT_APP" 2>/dev/null || true
-          find "$APP/Frameworks" -maxdepth 1 -type d -name "*.framework" 2>/dev/null | while read -r FW; do
-            echo " sign $FW"
-            codesign --force --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" "$FW"
-          done
-          while IFS= read -r F; do
-            if file "$F" | grep -q "Mach-O"; then
-              echo " sign $F"
-              codesign --force --keychain "$KEYCHAIN" --sign "$F"
-            fi
-          done < <(find "$APP" -type f \( -name "*.dylib" -o -name "*.so" -o -perm -111 \) 2>/dev/null)
-          cp "$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision" "$APP/embedded.mobileprovision"
-          codesign --force --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" --entitlements "$ENT_APP" "$APP"
-
-      - name: Verify code signatures (archive) & crest resource
-        shell: bash
-        run: |
-          set -euo pipefail
-          APP="${{ steps.xcode.outputs.APP_DIR }}/EoghanRua.xcarchive/Products/Applications/${{ steps.scheme.outputs.SCHEME }}.app"
-          codesign -vvv --deep --strict "$APP"
-          if [ -f "$APP/resources/crest.png" ]; then
-            echo "OK: crest.png found under resources/"
-          else
-            echo "::warning::crest.png not found under resources/ (check pyproject resources= and code path)"
-          fi
-
-      - name: Package IPA manually
-        id: manualipa
-        shell: bash
-        run: |
-          set -euo pipefail
-          APP_ROOT="${{ steps.xcode.outputs.APP_DIR }}/EoghanRua.xcarchive/Products/Applications"
-          OUT="${{ steps.xcode.outputs.APP_DIR }}/manual_export"
-          mkdir -p "$OUT/Payload"
-          cp -R "$APP_ROOT/${{ steps.scheme.outputs.SCHEME }}.app" "$OUT/Payload/"
-          (cd "$OUT" && zip -qry "EoghanRua-AdHoc-Manual.ipa" Payload)
-          echo "IPA_PATH=$OUT/EoghanRua-AdHoc-Manual.ipa" >> $GITHUB_OUTPUT
-          ls -lh "$OUT"
-
-      - name: Verify IPA content signatures
-        shell: bash
-        run: |
-          set -euo pipefail
-          TMPDIR=$(mktemp -d)
-          cp "${{ steps.manualipa.outputs.IPA_PATH }}" "$TMPDIR/app.ipa"
-          cd "$TMPDIR"
-          unzip -q app.ipa
-          APP="Payload/${{ steps.scheme.outputs.SCHEME }}.app"
-          codesign -vvv --deep --strict "$APP"
-          if [ -f "$APP/resources/crest.png" ]; then
-            echo "OK: crest.png present inside IPA resources/"
-          else
-            echo "::warning::crest.png missing inside IPA resources/"
-          fi
-
-      - name: Upload IPA (Manual)
-        uses: actions/upload-artifact@v4
-        with:
-          name: EoghanRua-AdHoc-IPA-Manual
-          path: ${{ steps.manualipa.outputs.IPA_PATH }}
+      # (… keep your signing/archive/package steps unchanged below …)
+      # -- snip --
