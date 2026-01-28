@@ -47,7 +47,7 @@ class EoghanRuaApp(toga.App):
                 style=Pack(padding=20),
             )
             self.main_window.show()
-
+            
     def goto_home(self):
         try:
             from eoghan_rua_team_selector.views.home import Home
