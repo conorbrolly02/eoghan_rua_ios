@@ -12,36 +12,35 @@ homepage = "https://eoghanrua.ie"
 project_name = "Eoghan Rua Team Selector"
 bundle = "ie.eoghanrua"
 url = "https://eoghanrua.ie"
+
+# IMPORTANT: 'sources' must point at your actual Python package directory on disk.
+# Your repo has: eoghan_rua_team_selector/
 sources = ["eoghan_rua_team_selector"]
 
-# ─────────────────────────────────────────────────────
-#   iOS Application Settings
-#   FINAL BUNDLE ID → ie.eoghanrua.eoghanruateamselector
-#   Briefcase combines:
-#      bundle + "." + app_name
-# ─────────────────────────────────────────────────────
-
+# ----------------------------------------------------------------------
+# App configuration
+# KEEP the section header's slug aligned with your package directory name.
+# This slug does NOT need to equal your bundle ID or app_name.
+# ----------------------------------------------------------------------
 [tool.briefcase.app.eoghan_rua_team_selector]
 formal_name = "Eoghan Rua Team Selector"
 description = "Offline team selector app for Eoghan Rua GAA."
-app_name = "eoghanruateamselector"        # <--- MUST MATCH bundle ID
+
+# app_name + bundle -> bundle identifier
+# FINAL BUNDLE ID produced = ie.eoghanrua.eoghanruateamselector
+app_name = "eoghanruateamselector"
 module = "eoghan_rua_team_selector.bootstrap"
 
 # Branding assets
-icon = "assets/icon.png"
+icon   = "assets/icon.png"
 splash = "assets/splash.png"
 
 # Runtime resources packaged inside the app bundle
-resources = [
-    "assets/crest.png",
-]
+resources = ["assets/crest.png"]
 
 # App dependencies
 requires = [
-    "toga-ios>=0.4.7",
-    "Pillow>=10.0.0",
-    "XlsxWriter>=3.1.9"
+  "toga-ios>=0.4.7",
+  "Pillow>=10.0.0",
+  "XlsxWriter>=3.1.9",
 ]
-
-# Optional iOS customizations placeholder
-# [tool.briefcase.app.eoghan_rua_team_selector.iOS]
