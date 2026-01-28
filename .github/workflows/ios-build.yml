@@ -7,7 +7,7 @@ jobs:
   build-ios:
     runs-on: macos-latest
     env:
-      # Keep this in sync with app.py app_id
+      # Keep this in sync with app.py app_id and pyproject.toml
       BUNDLE_ID: ie.eoghanrua.eoghanruateamselector
       BRIEFCASE_VERBOSE: "1"
 
@@ -24,7 +24,9 @@ jobs:
 
       # 3) 🔥 Clean previous build artifacts (IMPORTANT)
       - name: Clean build artifacts
+        shell: bash
         run: |
+          set -euo pipefail
           rm -rf build
           rm -rf dist
 
@@ -64,11 +66,6 @@ jobs:
           if ! grep -E '^[[:space:]]*requires[[:space:]]*=' "$PY" >/dev/null; then
             echo "::warning::Missing requires=[...] list"
             WARN=1
-          fi
-
-          # optional: std-nslog helpful for stdout->syslog (only warn)
-          if ! grep -Ei 'std-nslog' "$PY" >/dev/null; then
-            echo "::notice::std-nslog not present in requires (prints() won’t appear in syslog; exceptions still will via NSLog)"
           fi
 
           # icon / splash / resources
@@ -228,12 +225,13 @@ jobs:
           # Verify the P12 opens with the given password (no keys printed)
           openssl pkcs12 -in "$CERT_P12" -passin pass:"$IOS_CERT_PASSWORD" -info -nokeys -noout
 
-      # 12) Set up signing (import cert + profile)
+      # 12) Set up signing (import cert + profile) + profile/bundle ID verification
       - name: Set up signing
         id: signing
         env:
           IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
           IOS_PROVISION_PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
+          BUNDLE_ID: ${{ env.BUNDLE_ID }}
         shell: bash
         run: |
           set -euo pipefail
@@ -261,6 +259,7 @@ jobs:
           PROFILE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :Name' "$PROFILE_PLIST")
           PROFILE_UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PROFILE_PLIST")
           TEAM_ID=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PROFILE_PLIST")
+          APPID_FULL=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$PROFILE_PLIST" || true)
 
           echo "PROFILE_NAME=$PROFILE_NAME" >> $GITHUB_OUTPUT
           echo "PROFILE_UUID=$PROFILE_UUID" >> $GITHUB_OUTPUT
@@ -268,6 +267,19 @@ jobs:
           echo "KEYCHAIN=$KEYCHAIN" >> $GITHUB_OUTPUT
 
           echo "Using profile: $PROFILE_NAME ($PROFILE_UUID) Team: $TEAM_ID"
+          echo "Profile application-identifier: $APPID_FULL"
+
+          # Verify profile's App ID matches our BUNDLE_ID
+          if [ -n "$APPID_FULL" ]; then
+            # Strip the TeamID prefix (TEAMID.)
+            APPID_NO_TEAM="${APPID_FULL#*.}"
+            if [ "$APPID_NO_TEAM" != "$BUNDLE_ID" ]; then
+              echo "::error::Provisioning profile AppID ($APPID_NO_TEAM) does not match BUNDLE_ID ($BUNDLE_ID)"
+              exit 1
+            fi
+          else
+            echo "::warning::No application-identifier found in profile entitlements; skipping check."
+          fi
 
       # 13) Archive with Distribution identity + profile
       - name: Archive iOS app
@@ -372,3 +384,4 @@ jobs:
         with:
           name: EoghanRua-AdHoc-IPA-Manual
           path: ${{ steps.manualipa.outputs.IPA_PATH }}
+``
