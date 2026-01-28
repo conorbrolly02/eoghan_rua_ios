@@ -18,8 +18,8 @@ sources = ["eoghan_rua_team_selector"]
 
 # ----------------------------------------------------------------------
 # App configuration
-# Keep the slug equal to the real package name.
-# Use app_name to control the Apple bundle identifier.
+# Keep the slug equal to the real package name (with underscores).
+# Use app_name to control the Apple-safe bundle identifier.
 # Resulting bundle ID = ie.eoghanrua.eoghanruateamselector
 # ----------------------------------------------------------------------
 [tool.briefcase.app.eoghan_rua_team_selector]
