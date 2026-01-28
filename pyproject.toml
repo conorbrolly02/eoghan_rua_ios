@@ -1,5 +1,5 @@
 [project]
-name = "eoghanruateamselector "
+name = "eoghan_rua_team_selector"
 version = "1.0.0"
 description = "Offline team selector app for Eoghan Rua GAA."
 readme = "README.md"
@@ -14,29 +14,34 @@ bundle = "ie.eoghanrua"
 url = "https://eoghanrua.ie"
 sources = ["eoghan_rua_team_selector"]
 
+# ─────────────────────────────────────────────────────
+#   iOS Application Settings
+#   FINAL BUNDLE ID → ie.eoghanrua.eoghanruateamselector
+#   Briefcase combines:
+#      bundle + "." + app_name
+# ─────────────────────────────────────────────────────
+
 [tool.briefcase.app.eoghan_rua_team_selector]
 formal_name = "Eoghan Rua Team Selector"
 description = "Offline team selector app for Eoghan Rua GAA."
-app_name = "eoghan_rua_team_selector"
-
-# Use the Python bootstrap module to start the app
+app_name = "eoghanruateamselector"        # <--- MUST MATCH bundle ID
 module = "eoghan_rua_team_selector.bootstrap"
 
 # Branding assets
-icon   = "assets/icon.png"
+icon = "assets/icon.png"
 splash = "assets/splash.png"
 
-# Files loaded at runtime from the app bundle
+# Runtime resources packaged inside the app bundle
 resources = [
-  "assets/crest.png",
+    "assets/crest.png",
 ]
 
-# iOS app dependencies
+# App dependencies
 requires = [
-  "toga-ios>=0.4.7",
-  "Pillow>=10.0.0",
-  "XlsxWriter>=3.1.9",
+    "toga-ios>=0.4.7",
+    "Pillow>=10.0.0",
+    "XlsxWriter>=3.1.9"
 ]
 
-# You can add platform-specific config later if needed:
+# Optional iOS customizations placeholder
 # [tool.briefcase.app.eoghan_rua_team_selector.iOS]
