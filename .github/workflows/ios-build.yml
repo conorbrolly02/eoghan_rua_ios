@@ -12,15 +12,17 @@ jobs:
       BRIEFCASE_VERBOSE: "1"
 
     steps:
+      # 1) Checkout
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2) Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # Start clean so Briefcase/Xcode don't reuse stale metadata
+      # 3) 🔥 Clean previous build artifacts (IMPORTANT)  <-- Step 5 goes right here
       - name: Clean build artifacts
         shell: bash
         run: |
@@ -35,16 +37,38 @@ jobs:
           python -m pip install --upgrade pip
           pip install briefcase Pillow
 
-      # Quick print of the app slug and sources to verify alignment
-      - name: Debug pyproject sections & sources
+      # 4) Validate Briefcase slug/sources/app_name (fail fast if drift)
+      - name: Validate Briefcase slug & sources (fail fast)
         shell: bash
         run: |
           set -euo pipefail
-          echo "---- Slugs present ----"
-          grep -n '^\[tool\.briefcase\.app\.' pyproject.toml || true
-          echo "---- Sources ----"
-          grep -n '^[[:space:]]*sources[[:space:]]*=' pyproject.toml || true
+          python - <<'PY'
+          import sys, tomllib, pathlib
+          py = pathlib.Path("pyproject.toml").read_bytes()
+          data = tomllib.loads(py.decode("utf-8"))
+          apps = data.get("tool", {}).get("briefcase", {}).get("app", {})
+          if not apps or len(apps) != 1:
+              print(f"::error::Expected exactly 1 [tool.briefcase.app.*] section; found {len(apps)}.")
+              sys.exit(1)
+          slug = list(apps.keys())[0]
+          sources = data.get("tool", {}).get("briefcase", {}).get("sources", [])
+          print(f"Detected slug: {slug}")
+          print(f"Detected sources: {sources}")
+          if "eoghan_rua_team_selector" not in sources:
+              print("::error::sources must include 'eoghan_rua_team_selector'")
+              sys.exit(1)
+          if slug != "eoghan_rua_team_selector":
+              print(f"::error::app slug must be 'eoghan_rua_team_selector' (was '{slug}')")
+              sys.exit(1)
+          app = apps[slug]
+          app_name = app.get("app_name")
+          if app_name != "eoghanruateamselector":
+              print(f"::error::app_name must be 'eoghanruateamselector' (was '{app_name}')")
+              sys.exit(1)
+          print("Briefcase configuration looks good.")
+          PY
 
+      # 5) Generate iOS AppIcon variants (optional convenience)
       - name: Generate iOS AppIcon variants from base image
         shell: bash
         run: |
@@ -77,6 +101,7 @@ jobs:
               print("Base icon not found; skipping variant rendering")
           PY
 
+      # 6) Create/Update Briefcase project
       - name: Create iOS project & update metadata/resources
         shell: bash
         run: |
@@ -99,6 +124,7 @@ jobs:
           fi
           set -e
 
+      # 7) Build
       - name: Build iOS App
         shell: bash
         run: |
@@ -109,6 +135,7 @@ jobs:
             briefcase build "iOS Xcode"
           fi
 
+      # 8) Locate Xcode dir
       - name: Locate Xcode directory
         id: xcode
         shell: bash
@@ -122,6 +149,7 @@ jobs:
           echo "APP_DIR=$APP_DIR" >> $GITHUB_OUTPUT
           echo "Found Xcode dir: $APP_DIR"
 
+      # 9) Determine scheme
       - name: Determine scheme
         id: scheme
         shell: bash
@@ -136,7 +164,7 @@ jobs:
           echo "SCHEME=$SCHEME" >> $GITHUB_OUTPUT
           echo "Using scheme: $SCHEME"
 
-      # Decode & verify P12 before importing
+      # 10) Decode & verify PKCS#12 (fail fast if wrong password/secret)
       - name: Decode & verify PKCS#12
         env:
           IOS_CERT_BASE64: ${{ secrets.IOS_CERT_BASE64 }}
@@ -148,6 +176,7 @@ jobs:
           echo "$IOS_CERT_BASE64" | base64 --decode > "$CERT_P12"
           openssl pkcs12 -in "$CERT_P12" -passin pass:"$IOS_CERT_PASSWORD" -info -nokeys -noout
 
+      # 11) Import cert + install profile + verify profile AppID
       - name: Set up signing (import cert + profile) and validate profile AppID
         id: signing
         env:
@@ -194,6 +223,7 @@ jobs:
             echo "::warning::No application-identifier found in profile entitlements; skipping check."
           fi
 
+      # 12) Archive
       - name: Archive iOS app
         shell: bash
         run: |
@@ -213,6 +243,7 @@ jobs:
             -archivePath EoghanRua.xcarchive \
             archive
 
+      # 13) Re-sign frameworks → embed profile → sign app bundle
       - name: Finalize signing order (frameworks → embed profile → app)
         shell: bash
         run: |
@@ -239,6 +270,7 @@ jobs:
           cp "$HOME/Library/MobileDevice/Provisioning Profiles/profile.mobileprovision" "$APP/embedded.mobileprovision"
           codesign --force --keychain "$KEYCHAIN" --sign "$IDENTITY_HASH" --entitlements "$ENT_APP" "$APP"
 
+      # 14) Verify signatures + crest resource (archive)
       - name: Verify code signatures (archive) & crest resource
         shell: bash
         run: |
@@ -251,6 +283,7 @@ jobs:
             echo "::warning::crest.png not found under resources/ (check pyproject resources= and code path)"
           fi
 
+      # 15) Package IPA manually
       - name: Package IPA manually
         id: manualipa
         shell: bash
@@ -264,6 +297,7 @@ jobs:
           echo "IPA_PATH=$OUT/EoghanRua-AdHoc-Manual.ipa" >> $GITHUB_OUTPUT
           ls -lh "$OUT"
 
+      # 16) Verify IPA content signatures
       - name: Verify IPA content signatures
         shell: bash
         run: |
@@ -280,6 +314,7 @@ jobs:
             echo "::warning::crest.png missing inside IPA resources/"
           fi
 
+      # 17) Upload IPA
       - name: Upload IPA (Manual)
         uses: actions/upload-artifact@v4
         with:
