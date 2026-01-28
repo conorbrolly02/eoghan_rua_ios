@@ -16,20 +16,13 @@ from rubicon.objc import NSLog
 
 
 def resource_path(app: toga.App, name: str) -> Path:
-    """Resolve a file bundled in the iOS app (Briefcase puts them under resources/)."""
     return Path(app.paths.app) / "resources" / name
 
 
 class EoghanRuaApp(toga.App):
     def startup(self):
-        """
-        Create the main window and show the first screen.
-        If anything goes wrong, log the traceback and present a visible error window
-        (prevents 'opens then closes' symptom).
-        """
         NSLog("EoghanRuaApp.startup() begin")
         try:
-            # Minimal splash so we can prove launch works
             title = toga.Label(
                 "Eoghan Rua Team Selector",
                 style=Pack(font_size=18, font_weight="bold", padding_bottom=8),
@@ -55,7 +48,6 @@ class EoghanRuaApp(toga.App):
             )
             self.main_window.show()
 
-    # ---- Navigation helpers ----
     def goto_home(self):
         try:
             from eoghan_rua_team_selector.views.home import Home
@@ -85,7 +77,6 @@ class EoghanRuaApp(toga.App):
 
 
 def main():
-    """Briefcase calls main(); returning the App is sufficient."""
     return EoghanRuaApp(
         app_id="ie.eoghanrua.eoghanruateamselector",
         app_name="Eoghan Rua Team Selector",
